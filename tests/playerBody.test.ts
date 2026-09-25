@@ -162,6 +162,94 @@ describe('PlayerBody (시험장)', () => {
     expect(b.eyeHeight).toBeCloseTo(PLAYER.eyeHeight, 2);
   });
 
+  it('슬라이드는 걷기보다 확실히 멀리 간다(0.8초에 25% 이상), 끝나면 걷기 속도로 이어진다', () => {
+    const walk = spawn(-6, 0.05, 15, YAW_NEG_Z);
+    const slide = spawn(6, 0.05, 15, YAW_NEG_Z);
+    run(walk, 0.5, { moveZ: 1 });
+    run(slide, 0.5, { moveZ: 1 });
+    const w0 = walk.position.z;
+    const s0 = slide.position.z;
+    slide.step(DT, { ...emptyIntent(), moveZ: 1, slidePressed: true });
+    walk.step(DT, { ...emptyIntent(), moveZ: 1 });
+    expect(slide.slideStarted).toBe(true);
+    // 걷기 속도에서 시작하면 최소 시작 속도 이상, 최대 속도 이하
+    expect(hSpeed(slide)).toBeGreaterThanOrEqual(SLIDE.minSlideSpeed - SLIDE.decel * DT - 1e-6);
+    expect(hSpeed(slide)).toBeLessThanOrEqual(SLIDE.maxSpeed);
+    run(slide, SLIDE.duration - DT, { moveZ: 1 });
+    run(walk, SLIDE.duration - DT, { moveZ: 1 });
+    const walked = w0 - walk.position.z;
+    const slid = s0 - slide.position.z;
+    expect(walked).toBeCloseTo(PLAYER.walkSpeed * SLIDE.duration, 1);
+    expect(slid).toBeGreaterThanOrEqual(walked * 1.25);
+    // 끝날 때 걷기보다 느려져 멈칫하지 않는다
+    expect(slide.grounded).toBe(true);
+    run(slide, 0.1, { moveZ: 1 });
+    expect(slide.sliding).toBe(false);
+    expect(hSpeed(slide)).toBeCloseTo(PLAYER.walkSpeed, 1);
+  });
+
+  it('빨리 달려 들어와도 슬라이드 속도는 최대 속도를 넘지 않는다', () => {
+    const b = spawn(0, 0.05, 15, YAW_NEG_Z);
+    run(b, 0.5, { moveZ: 1 });
+    b.velocity.z = -14; // 점프대·넉백 직후 등
+    b.step(DT, { ...emptyIntent(), moveZ: 1, slidePressed: true });
+    expect(b.sliding).toBe(true);
+    expect(hSpeed(b)).toBeLessThanOrEqual(SLIDE.maxSpeed);
+  });
+
+  it('슬라이드는 바닥을 한 프레임 놓친 것으로는 끊기지 않는다(코요테 타임만큼 너그럽게)', () => {
+    const b = spawn(0, 0.05, 15, YAW_NEG_Z);
+    run(b, 0.5, { moveZ: 1 });
+    b.step(DT, { ...emptyIntent(), moveZ: 1, slidePressed: true });
+    run(b, 0.2, { moveZ: 1 });
+    const speed = hSpeed(b);
+    // 작은 턱·경사 꼭대기에서 지난 스텝이 바닥 판정을 놓친 상황
+    b.grounded = false;
+    b.step(DT, { ...emptyIntent(), moveZ: 1 });
+    expect(b.sliding).toBe(true);
+    expect(hSpeed(b)).toBeCloseTo(speed - SLIDE.decel * DT, 3);
+    expect(b.grounded).toBe(true);
+    // 그 한 프레임에 누른 슬라이드 입력도 받는다(쿨다운이 끝난 뒤)
+    run(b, SLIDE.duration + SLIDE.cooldown, { moveZ: 1 });
+    expect(b.sliding).toBe(false);
+    b.grounded = false;
+    b.step(DT, { ...emptyIntent(), moveZ: 1, slidePressed: true });
+    expect(b.slideStarted).toBe(true);
+  });
+
+  it('난간에서 슬라이드로 떨어지면 코요테 타임 뒤 공중에서 끝나고 관성은 유지, 쿨다운 적용', () => {
+    // 플랫폼(윗면 y=2.5, x 5..11) 위에서 +X 로 달리다 슬라이드
+    const b = spawn(5.6, 2.6, 8, YAW_POS_X);
+    run(b, 0.3, { moveZ: 1 });
+    expect(b.grounded).toBe(true);
+    b.step(DT, { ...emptyIntent(), moveZ: 1, slidePressed: true });
+    expect(b.sliding).toBe(true);
+    let leftAt = -1;
+    let t = 0;
+    run(b, 1, { moveZ: 1 }, (x) => {
+      t += DT;
+      if (leftAt < 0 && !x.grounded) leftAt = t;
+      return !x.sliding;
+    });
+    expect(leftAt).toBeGreaterThan(0);
+    // 떨어진 뒤 코요테 타임(± 한 프레임) 동안은 계속 슬라이드
+    expect(t - leftAt).toBeGreaterThan(PLAYER.coyoteTime - DT * 1.5);
+    expect(t - leftAt).toBeLessThan(PLAYER.coyoteTime + DT * 1.5);
+    expect(b.grounded).toBe(false);
+    expect(b.position.x).toBeGreaterThan(11);
+    // 공중 관성: 걷기보다 빠른 수평 속도가 남는다
+    expect(hSpeed(b)).toBeGreaterThan(PLAYER.walkSpeed);
+    // 2.5 m 낙하(≈0.5초)는 쿨다운(0.6초)보다 짧다: 착지하자마자 누르면 안 되고, 쿨다운이 끝나면 된다
+    const fell = run(b, 2, { moveZ: 1 }, (x) => x.grounded);
+    expect(b.grounded).toBe(true);
+    expect(fell).toBeLessThan(SLIDE.cooldown);
+    b.step(DT, { ...emptyIntent(), moveZ: 1, slidePressed: true });
+    expect(b.sliding).toBe(false);
+    run(b, SLIDE.cooldown - fell, { moveZ: 1 });
+    b.step(DT, { ...emptyIntent(), moveZ: 1, slidePressed: true });
+    expect(b.slideStarted).toBe(true);
+  });
+
   it(`느리면(< ${SLIDE.minSpeed} m/s) 슬라이드 안 됨`, () => {
     const b = spawn(0, 0.05, 8, YAW_NEG_Z);
     b.step(DT, { ...emptyIntent(), moveZ: 1, slidePressed: true });

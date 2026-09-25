@@ -1,8 +1,9 @@
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, expect, it, beforeAll, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import * as THREE from 'three';
 import { loadGlbNode } from './glb';
 import { buildMapFromScene, solvePadLaunch, type GameMap } from '../src/world/map';
+import { buildTestArena } from '../src/world/testArena';
 import { PlayerBody } from '../src/game/playerBody';
 import { emptyIntent } from '../src/core/input';
 import { PLAYER } from '../src/config';
@@ -131,5 +132,41 @@ describe.runIf(existsSync(FILE))('map_backyard.glb 게임플레이 검증', () =
       expect(body.position.z).toBeLessThan(b.maxZ + 1);
       expect(body.position.y).toBeGreaterThan(b.killY);
     }
+  });
+});
+
+describe('정적 맵 행렬 고정(저사양 CPU 최적화)', () => {
+  it('맵의 모든 노드는 행렬 자동 갱신이 꺼지고, 씬(자동 갱신 끔)에 붙이면 월드 행렬은 한 번 맞춰진 뒤 매 프레임 다시 계산하지 않는다', () => {
+    const map = buildTestArena();
+    let nodes = 0;
+    map.root.traverse((o) => {
+      nodes++;
+      expect(o.matrixAutoUpdate, o.name).toBe(false);
+    });
+    expect(nodes).toBeGreaterThan(10);
+    const platform = map.root.getObjectByName('platform')!;
+    const at = new THREE.Vector3().setFromMatrixPosition(platform.matrixWorld);
+    expect(at.toArray()).toEqual([8, 2.25, 8]);
+
+    // RenderContext 와 같은 설정(자동 갱신 끈 씬)에 붙이면 첫 갱신에서 씬 기준으로 맞춰진다
+    const scene = new THREE.Scene();
+    scene.matrixAutoUpdate = false;
+    scene.add(map.root);
+    expect(map.root.matrixWorldNeedsUpdate).toBe(true);
+    scene.updateMatrixWorld();
+    expect(map.root.matrixWorldNeedsUpdate).toBe(false);
+    expect(new THREE.Vector3().setFromMatrixPosition(platform.matrixWorld).toArray()).toEqual([8, 2.25, 8]);
+
+    // 이후 프레임: 정적 노드는 다시 계산하지 않고(값을 바꿔도 행렬 그대로), 움직이는 오브젝트는 계속 갱신된다
+    const spy = vi.spyOn(platform.matrixWorld, 'multiplyMatrices');
+    const mover = new THREE.Object3D();
+    scene.add(mover);
+    platform.position.x = 100;
+    mover.position.x = 3;
+    scene.updateMatrixWorld();
+    scene.updateMatrixWorld();
+    expect(spy).not.toHaveBeenCalled();
+    expect(new THREE.Vector3().setFromMatrixPosition(platform.matrixWorld).x).toBe(8);
+    expect(new THREE.Vector3().setFromMatrixPosition(mover.matrixWorld).x).toBe(3);
   });
 });

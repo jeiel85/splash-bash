@@ -135,7 +135,25 @@ export function buildMapFromScene(name: string, root: THREE.Object3D): GameMap {
     const box = new THREE.Box3().setFromObject(root);
     bounds = { minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z, killY: box.min.y - 10 };
   }
+  freezeStatic(root);
   return { name, root, collision, spawns, fountains, jumpPads, waypoints, balloonSpots, water, bounds };
+}
+
+/**
+ * 움직이지 않는 오브젝트 트리의 행렬을 지금 값으로 고정한다(매 프레임 재계산 끔).
+ * 맵은 CPU 에서 움직이는 것이 없다(수면 물결은 셰이더, 충돌·마커는 로드 때 한 번 읽음). 저사양 CPU 프로파일(QA s9d)에서
+ * 행렬 갱신(updateMatrixWorld·multiplyMatrices)이 프레임 시간의 약 7% 였고, 연습 모드 씬 노드 약 440개 중 맵이 약 170개다.
+ * 나중에 맵 일부를 코드로 움직이려면 그 오브젝트만 matrixAutoUpdate = true 로 되돌린다.
+ * 씬(RenderContext.scene)도 행렬 자동 갱신을 꺼 두었으므로, 처음 붙는 부모 기준 월드 행렬은 한 번 다시 계산하게 표시한다.
+ * 고정한 트리는 원점에 고정된 부모(씬)에만 붙인다 — 이미 붙어 계산된 뒤 움직이는 부모로 옮기면 월드 행렬이 따라가지 않는다.
+ */
+export function freezeStatic(root: THREE.Object3D): void {
+  root.traverse((o) => {
+    o.updateMatrix();
+    o.matrixAutoUpdate = false;
+  });
+  root.updateMatrixWorld(true);
+  root.matrixWorldNeedsUpdate = true;
 }
 
 /**

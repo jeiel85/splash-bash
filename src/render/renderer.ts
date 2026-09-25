@@ -96,6 +96,10 @@ export class RenderContext {
     this.renderer.domElement.id = 'game-canvas';
     container.appendChild(this.renderer.domElement);
 
+    // 씬 자체는 원점에 고정이다. 자동 갱신을 켜 두면 씬이 매 프레임 "바뀜"으로 표시되어 정적인 맵(freezeStatic)까지
+    // 모든 노드의 월드 행렬을 다시 곱한다. 움직이는 오브젝트(matrixAutoUpdate 기본값)는 스스로 갱신되므로 영향 없다
+    this.scene.matrixAutoUpdate = false;
+
     this.camera = new THREE.PerspectiveCamera(78, 1, 0.05, 400);
     this.camera.rotation.order = 'YXZ';
     this.scene.add(this.camera);

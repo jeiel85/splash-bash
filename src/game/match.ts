@@ -1,5 +1,38 @@
-import { MATCH } from '../config';
+import { MATCH, PLAYER_COLORS, TEAM_COLORS } from '../config';
 import type { GameMode, MatchState, PeerId, ScoreLine, TeamId } from '../types';
+
+/**
+ * 복사 없이 넘기는 읽기 전용 경기 상태(매 프레임 HUD·봇 판단용).
+ * 원본을 그대로 가리키므로 받은 쪽은 고치지 않고, 다음 프레임까지 붙잡아 두지 않는다.
+ */
+export type MatchStateView = Readonly<Omit<MatchState, 'scores' | 'teamScores'>> & {
+  readonly scores: Readonly<Record<PeerId, Readonly<ScoreLine>>>;
+  readonly teamScores: readonly [number, number];
+};
+
+/** 몸·물줄기 색: 팀전이고 팀이 정해졌으면 팀 색, 아니면 꾸미기 색(없거나 범위 밖이면 0번) */
+export function playerColor(mode: GameMode, team: TeamId, cosmeticColor: number | undefined): string {
+  if (mode === 'tdm' && (team === 0 || team === 1)) return TEAM_COLORS[team];
+  return PLAYER_COLORS[cosmeticColor ?? 0] ?? PLAYER_COLORS[0];
+}
+
+/** 이름표 색: 팀전이고 팀이 정해졌으면 팀 색, 아니면 흰색 */
+export function nameTagColor(mode: GameMode, team: TeamId): string {
+  return mode === 'tdm' && (team === 0 || team === 1) ? TEAM_COLORS[team] : '#ffffff';
+}
+
+/**
+ * 새 봇의 꾸미기 색: 지금 방의 사람·봇이 쓰지 않는 색 중에서 무작위로 고른다.
+ * 모두 쓰였으면 가장 적게 쓰인 색들 중에서 고른다(정원 안에서는 색이 겹치지 않게).
+ */
+export function pickBotColor(usedColors: Iterable<number>, rnd: () => number): number {
+  const counts = new Array<number>(PLAYER_COLORS.length).fill(0);
+  for (const c of usedColors) if (c >= 0 && c < counts.length) counts[c]++;
+  const least = Math.min(...counts);
+  const free: number[] = [];
+  for (let i = 0; i < counts.length; i++) if (counts[i] === least) free.push(i);
+  return free[Math.min(free.length - 1, Math.floor(rnd() * free.length))];
+}
 
 /**
  * 경기 규칙(호스트 전용): 시간, 점수, 팀 배정, 결과 화면, 다음 경기.
@@ -34,6 +67,11 @@ export class MatchHost {
 
   teamOf(id: PeerId): TeamId {
     return this.state.scores[id]?.team ?? -1;
+  }
+
+  /** 이미 등록된 참가자인지 */
+  has(id: PeerId): boolean {
+    return Object.hasOwn(this.state.scores, id);
   }
 
   /** 참가자 등록(이미 있으면 유지). 팀전이면 인원이 적은 팀에 배정 */
@@ -81,20 +119,38 @@ export class MatchHost {
     this.checkLimit();
   }
 
-  /** @returns 상태가 크게 바뀌었으면(단계 전환) true */
-  tick(dtMs: number, presentIds: Iterable<PeerId>): boolean {
+  /**
+   * @param presentIds 다음 경기로 넘어갈 때만 쓰는 지금 방의 참가자. 매 프레임 부르므로 함수로 넘기면 그때만 만든다
+   * @returns 상태가 크게 바뀌었으면(단계 전환) true
+   */
+  tick(dtMs: number, presentIds: Iterable<PeerId> | (() => Iterable<PeerId>)): boolean {
     this.remaining -= dtMs;
     if (this.remaining > 0) return false;
     if (this.state.phase === 'playing') {
       this.finish();
     } else {
-      this.nextRound(presentIds);
+      this.nextRound(typeof presentIds === 'function' ? presentIds() : presentIds);
     }
     return true;
   }
 
+  /** 지금 기준 남은 시간(ms) */
+  get remainingMs(): number {
+    return Math.max(0, Math.round(this.remaining));
+  }
+
+  /**
+   * 복사 없는 읽기 전용 보기(매 프레임 HUD·봇 판단용). remainingMs 는 부를 때 맞춘다.
+   * 쓰러짐·틱·참가자 변경 때 내용이 바뀌므로 붙잡아 두지 않는다. 네트워크로 보내거나 보관할 때는 snapshot().
+   */
+  view(): MatchStateView {
+    this.state.remainingMs = this.remainingMs;
+    return this.state;
+  }
+
+  /** 보내거나 보관할 복사본(받은 쪽이 고쳐도 호스트 상태는 그대로) */
   snapshot(): MatchState {
-    return { ...this.state, remainingMs: Math.max(0, Math.round(this.remaining)), scores: structuredClone(this.state.scores), teamScores: [...this.state.teamScores] as [number, number] };
+    return { ...this.state, remainingMs: this.remainingMs, scores: structuredClone(this.state.scores), teamScores: [...this.state.teamScores] as [number, number] };
   }
 
   private checkLimit(): void {

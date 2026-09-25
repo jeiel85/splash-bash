@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BALLOON, BOT, JUMPPAD, MATCH, NET, PLAYER, PLAYER_COLORS, TANK, TEAM_COLORS, WATER_TINT, WEAPONS } from '../config';
+import { BALLOON, BOT, JUMPPAD, MATCH, NET, PLAYER, TANK, WATER_TINT, WEAPONS } from '../config';
 import { Emitter } from '../core/events';
 import { emptyIntent, type Input, type Intent } from '../core/input';
 import { mulberry32 } from '../core/rng';
@@ -17,7 +17,7 @@ import { isInWater, solvePadLaunch, type GameMap, type SpawnPoint } from '../wor
 import { Avatar } from './avatar';
 import { BotActor, RemoteActor, Vitality } from './actors';
 import { BotBrain, BotDirector, botName, botShotDirection } from './bots';
-import { MatchHost, MatchView } from './match';
+import { MatchHost, MatchView, nameTagColor, pickBotColor, playerColor, type MatchStateView } from './match';
 import { PlayerBody } from './playerBody';
 import { ProjectileSystem, type HitTarget } from './projectiles';
 import { pickSpawn, type SpawnThreat } from './spawns';
@@ -45,7 +45,7 @@ interface GameEvents {
   roomFull: () => void;
 }
 
-/** 개발·테스트용 조작 훅(DEV 빌드 또는 ?debug) */
+/** 개발·테스트용 조작 훅(DEV 빌드 전용, window.__splash) */
 export interface DebugApi {
   state(): Record<string, unknown>;
   setIntent(i: Partial<Intent> | null): void;
@@ -74,6 +74,8 @@ export class Game extends Emitter<GameEvents> {
   private readonly arsenal = new Arsenal();
   private readonly vit = new Vitality();
   private readonly remotes = new Map<PeerId, RemoteActor>();
+  /** 오래 말이 없어(탭 강제 종료 등) "연결이 끊겼어요" 를 이미 알린 사람 */
+  private readonly silenceNoticed = new Set<PeerId>();
   private readonly bots = new Map<PeerId, BotActor>();
   /** 봇 공용 상태(인지 목록·발사 소리·봐주기·대상 나눠 갖기) — 호스트일 때만 쓴다 */
   private readonly botDirector = new BotDirector();
@@ -210,6 +212,9 @@ export class Game extends Emitter<GameEvents> {
   }
 
   private onPlayerInfo(info: PlayerInfo): void {
+    // 호스트는 모습을 만들기 전에 경기에 등록해 팀부터 정한다(팀전에서 처음부터 팀 색으로 보이게)
+    const newToMatch = !!this.matchHost && !this.matchHost.has(info.id);
+    this.matchHost?.addPlayer(info.id);
     let r = this.remotes.get(info.id);
     if (!r) {
       r = new RemoteActor(info, this.makeAvatar(info));
@@ -221,10 +226,15 @@ export class Game extends Emitter<GameEvents> {
       this.refreshAvatar(r);
     }
     if (this.matchHost) {
-      this.matchHost.addPlayer(info.id);
-      this.session.sendMatch(this.matchHost.snapshot(), info.id);
-      this.session.sendBotInfos([...this.bots.values()].map((b) => b.info), info.id);
-      this.adjustBots();
+      const botsChanged = this.adjustBots();
+      if (newToMatch) {
+        // 새 참가자의 팀·점수 줄을 모두에게 바로 알린다 — 다른 손님이 1초 주기 방송까지 잘못된 색으로 보지 않게
+        if (!botsChanged) this.broadcastMatch();
+      } else {
+        this.session.sendMatch(this.matchHost.snapshot(), info.id);
+        this.session.sendBotInfos([...this.bots.values()].map((b) => b.info), info.id);
+      }
+      this.refreshAllIdentities();
     }
     this.checkCapacity();
   }
@@ -248,7 +258,8 @@ export class Game extends Emitter<GameEvents> {
   private onPlayerLeft(id: PeerId): void {
     const r = this.remotes.get(id);
     if (!r) return;
-    this.hud.toast(`${r.info.name} 님이 나갔어요`);
+    // 말이 없어 이미 "연결이 끊겼어요" 를 알린 사람은 다시 알리지 않는다(전송 계층의 떠남 알림은 10초 넘게 늦다)
+    if (!this.silenceNoticed.delete(id)) this.hud.toast(`${r.info.name} 님이 나갔어요`);
     r.avatar.dispose();
     this.remotes.delete(id);
     // 떠난 사람에게 보낼 명중은 받을 권한자가 없다
@@ -292,7 +303,7 @@ export class Game extends Emitter<GameEvents> {
   }
 
   /** 경기 상태가 바뀐 뒤: 새 라운드면 전원 부활, 팀 색 갱신 */
-  private afterMatchUpdate(m: MatchState): void {
+  private afterMatchUpdate(m: MatchStateView): void {
     const newRound = m.round !== this.lastRound && this.lastRound !== -1;
     const toPlaying = m.phase === 'playing' && this.lastPhase === 'results';
     if ((newRound || toPlaying) && m.phase === 'playing') {
@@ -335,8 +346,10 @@ export class Game extends Emitter<GameEvents> {
     this.matchHost.retain([...this.session.players().map((p) => p.id), ...this.bots.keys()]);
     this.adjustBots();
     this.broadcastMatch();
-    this.lastRound = this.matchHost.snapshot().round;
+    this.lastRound = this.matchHost.view().round;
     this.lastPhase = this.matchHost.phase;
+    // 이어받은 상태에 없던 사람은 방금 팀이 정해졌다
+    this.refreshAllIdentities();
     if (this.remotes.size > 0) this.hud.toast('방장이 되었어요 👑');
   }
 
@@ -350,9 +363,12 @@ export class Game extends Emitter<GameEvents> {
     return 1 + [...this.remotes.values()].filter((r) => !r.info.isBot).length;
   }
 
-  /** 사람 수에 맞춰 봇 추가·제거(호스트) */
-  private adjustBots(): void {
-    if (!this.matchHost || this.botGrace > 0) return;
+  /**
+   * 사람 수에 맞춰 봇 추가·제거(호스트)
+   * @returns 봇이 바뀌어 경기 상태를 방송했으면 true
+   */
+  private adjustBots(): boolean {
+    if (!this.matchHost || this.botGrace > 0) return false;
     const want = this.opts.botFill ? Math.max(0, MATCH.botFillTo - this.humanCount()) : 0;
     let changed = false;
     while (this.bots.size < want) {
@@ -366,17 +382,19 @@ export class Game extends Emitter<GameEvents> {
       const id = prefix + n;
       const info: PlayerInfo = {
         id, name: botName(n), isBot: true, joinedAt: 0,
-        cosmetics: { color: Math.floor(this.rnd() * PLAYER_COLORS.length), hat: HAT_IDS[1 + Math.floor(this.rnd() * (HAT_IDS.length - 1))] },
+        // 개인전에서 봇끼리·사람과 색이 겹치지 않게 지금 방에서 안 쓰는 색부터
+        cosmetics: { color: pickBotColor(this.usedColors(), this.rnd), hat: HAT_IDS[1 + Math.floor(this.rnd() * (HAT_IDS.length - 1))] },
       };
+      // 팀을 먼저 정해야 모습이 처음부터 팀 색으로 만들어진다
+      this.matchHost.addPlayer(id);
       const bot = new BotActor(info, this.makeAvatar(info), this.makeBrain(id), this.map.collision);
       this.bots.set(id, bot);
-      this.matchHost.addPlayer(id);
       this.respawnBot(bot);
       changed = true;
     }
     while (this.bots.size > want) {
       // 점수가 가장 낮은 봇부터 뺀다
-      const scores = this.matchHost.snapshot().scores;
+      const scores = this.matchHost.view().scores;
       const victim = [...this.bots.keys()].sort((a, b) => (scores[a]?.splashes ?? 0) - (scores[b]?.splashes ?? 0))[0];
       this.bots.get(victim)!.avatar.dispose();
       this.bots.delete(victim);
@@ -387,6 +405,14 @@ export class Game extends Emitter<GameEvents> {
       this.broadcastMatch();
       this.refreshAllIdentities();
     }
+    return changed;
+  }
+
+  /** 지금 방의 사람·봇이 쓰는 꾸미기 색(봇 색 고르기용) */
+  private *usedColors(): Generator<number> {
+    yield this.session.self.cosmetics.color;
+    for (const r of this.remotes.values()) yield r.info.cosmetics.color;
+    for (const b of this.bots.values()) yield b.info.cosmetics.color;
   }
 
   private makeBrain(id: PeerId): BotBrain {
@@ -418,11 +444,9 @@ export class Game extends Emitter<GameEvents> {
     return this.remotes.get(id)?.info ?? this.bots.get(id)?.info;
   }
 
-  colorOf(id: PeerId): string {
-    const team = this.teamOf(id);
-    if (this.mode() === 'tdm' && (team === 0 || team === 1)) return TEAM_COLORS[team];
-    const info = this.infoOf(id);
-    return PLAYER_COLORS[info?.cosmetics.color ?? 0];
+  /** @param info 아직 목록에 넣기 전인 참가자(모습을 만들 때)는 직접 넘긴다 */
+  colorOf(id: PeerId, info: PlayerInfo | undefined = this.infoOf(id)): string {
+    return playerColor(this.mode(), this.teamOf(id), info?.cosmetics.color);
   }
 
   private waterColor(id: PeerId, out: THREE.Color): THREE.Color {
@@ -434,29 +458,39 @@ export class Game extends Emitter<GameEvents> {
   }
 
   private makeAvatar(info: PlayerInfo): Avatar {
-    const color = this.colorOf(info.id);
-    const avatar = new Avatar(this.assets, info.name + (info.isBot ? ' 🤖' : ''), color, info.cosmetics.hat, this.nameColor(info.id));
+    const color = this.colorOf(info.id, info);
+    const nameColor = this.nameColor(info.id);
+    const avatar = new Avatar(this.assets, info.name + (info.isBot ? ' 🤖' : ''), color, info.cosmetics.hat, nameColor);
     avatar.root.userData.appliedColor = color;
+    avatar.root.userData.appliedNameColor = nameColor;
     avatar.effects = this.fx;
     this.ctx.scene.add(avatar.root);
     return avatar;
   }
 
   private nameColor(id: PeerId): string {
-    const team = this.teamOf(id);
-    return this.mode() === 'tdm' && (team === 0 || team === 1) ? TEAM_COLORS[team] : '#ffffff';
+    return nameTagColor(this.mode(), this.teamOf(id));
   }
 
   private refreshAvatar(a: RemoteActor | BotActor): void {
-    const color = this.colorOf(a.info.id);
-    a.avatar.setIdentity(a.info.name + (a.info.isBot ? ' 🤖' : ''), color, a.info.cosmetics.hat, this.nameColor(a.info.id));
+    const color = this.colorOf(a.info.id, a.info);
+    const nameColor = this.nameColor(a.info.id);
+    a.avatar.setIdentity(a.info.name + (a.info.isBot ? ' 🤖' : ''), color, a.info.cosmetics.hat, nameColor);
     a.avatar.root.userData.appliedColor = color;
+    a.avatar.root.userData.appliedNameColor = nameColor;
   }
 
+  /**
+   * 팀·모드가 바뀌었을 수 있을 때(경기 상태 수신·참가·봇 변경·호스트 이전) 모습 색을 맞춘다.
+   * 꾸미기 색이 팀 색과 같아도 이름표 색은 바뀌므로 둘 다 비교한다
+   */
   private refreshAllIdentities(): void {
-    for (const a of [...this.remotes.values(), ...this.bots.values()]) {
-      if (a.avatar.root.userData.appliedColor !== this.colorOf(a.info.id)) this.refreshAvatar(a);
-    }
+    const stale = (a: RemoteActor | BotActor) => {
+      const d = a.avatar.root.userData;
+      return d.appliedColor !== this.colorOf(a.info.id, a.info) || d.appliedNameColor !== this.nameColor(a.info.id);
+    };
+    for (const a of this.remotes.values()) if (stale(a)) this.refreshAvatar(a);
+    for (const a of this.bots.values()) if (stale(a)) this.refreshAvatar(a);
     const mine = this.colorOf(this.session.selfId);
     if (mine !== this.myColor) {
       this.myColor = mine;
@@ -553,7 +587,7 @@ export class Game extends Emitter<GameEvents> {
     if (this.matchHost) {
       this.matchHost.recordSplash(ev.victim, ev.killer);
       this.broadcastMatch();
-      this.afterMatchUpdate(this.matchHost.snapshot());
+      this.afterMatchUpdate(this.matchHost.view());
     }
   }
 
@@ -719,6 +753,7 @@ export class Game extends Emitter<GameEvents> {
     const renderT = now - NET.interpDelayMs;
     for (const r of this.remotes.values()) {
       r.sample(renderT);
+      this.noticeSilence(r);
       if (!this.shown(r)) {
         r.avatar.root.visible = false;
         continue;
@@ -739,11 +774,12 @@ export class Game extends Emitter<GameEvents> {
       this.sendNet(now);
     }
     if (this.matchHost) {
-      const changed = this.matchHost.tick(dt * 1000, this.presentIds());
+      // 참가자 목록은 다음 경기로 넘어갈 때만 만든다(매 프레임 배열 할당 없음)
+      const changed = this.matchHost.tick(dt * 1000, this.presentIdsFn);
       this.matchAccum += dt * 1000;
       if (changed || this.matchAccum >= NET.matchBroadcastMs) {
         this.broadcastMatch();
-        if (changed) this.afterMatchUpdate(this.matchHost.snapshot());
+        if (changed) this.afterMatchUpdate(this.matchHost.view());
       }
     }
     this.pingAccum += dt;
@@ -763,6 +799,8 @@ export class Game extends Emitter<GameEvents> {
     return [this.session.selfId, ...[...this.remotes.values()].filter((r) => !r.info.isBot).map((r) => r.info.id), ...this.bots.keys()];
   }
 
+  private readonly presentIdsFn = (): PeerId[] => this.presentIds();
+
   /**
    * 화면에 보이고 맞을 수 있는 원격: 스냅샷을 받았고, 오래 말이 없는 사람이 아님.
    * 탭이 강제로 닫힌 사람은 전송 계층이 10초 넘게 지나서야 떠났다고 알리는데, 그동안 멈춘 유령으로 서서
@@ -770,6 +808,24 @@ export class Game extends Emitter<GameEvents> {
    */
   private shown(r: RemoteActor): boolean {
     return r.hasData && !this.session.isSilent(r.info.id);
+  }
+
+  /**
+   * 사람이 NET.hostSilenceMs 넘게 말이 없어 화면에서 숨긴 순간 한 번 "연결이 끊겼어요" 를 알린다(떠남 알림은 10초 넘게 늦다).
+   * 다시 말하면 돌아왔다고 알리고, 나중에 떠남이 확정되면 onPlayerLeft 는 같은 사람을 또 알리지 않는다.
+   */
+  private noticeSilence(r: RemoteActor): void {
+    if (r.info.isBot) return;
+    const id = r.info.id;
+    const silent = this.session.isSilent(id);
+    if (silent === this.silenceNoticed.has(id)) return;
+    if (silent) {
+      this.silenceNoticed.add(id);
+      this.hud.toast(`${r.info.name} 님 연결이 끊겼어요`);
+    } else {
+      this.silenceNoticed.delete(id);
+      this.hud.toast(`${r.info.name} 님이 다시 연결됐어요`);
+    }
   }
 
   private checkJumpPads(body: PlayerBody, dt: number, isLocal: boolean): void {
@@ -847,7 +903,7 @@ export class Game extends Emitter<GameEvents> {
       dir.see(b.info.id, this.teamOf(b.info.id), b.body.position, b.body.velocity, b.vitality.alive, b.vitality.shielded, b.vitality.soak, true, b.brain.targetId);
     }
     // 봐주기 규칙(연속으로 젖기만 한 사람)은 점수로 판단 — 초당 2번
-    if (this.matchHost && dir.scoresDue(dt)) dir.syncScores(this.matchHost.snapshot().scores);
+    if (this.matchHost && dir.scoresDue(dt)) dir.syncScores(this.matchHost.view().scores);
     for (const bot of this.bots.values()) {
       if (bot.vitality.tick(dt)) this.respawnBot(bot);
       if (bot.vitality.alive) {
@@ -944,13 +1000,20 @@ export class Game extends Emitter<GameEvents> {
     this.sfx.setSoak(this.vit.alive ? this.vit.soak / PLAYER.maxSoak : 1);
   }
 
-  private scoreRows(): ScoreRow[] {
-    const state = this.matchHost?.snapshot() ?? this.matchView.state;
-    const scores = state?.scores ?? {};
+  /** HUD 로 넘기는 재사용 값(매 프레임 할당 없음) */
+  private readonly hudTeamScores: [number, number] = [0, 0];
+  /** 점수판 줄 캐시: 점수판·결과 화면은 0.3초·1초 간격으로 다시 그리고 핑은 1초마다 읽으므로 매 프레임 만들지 않는다 */
+  private rows: ScoreRow[] = [];
+  private rowsAge = Infinity;
+  private rowsBoard = false;
+  private rowsPhase: MatchState['phase'] | null = null;
+
+  private scoreRows(state: MatchStateView | null): ScoreRow[] {
+    const scores = state?.scores;
     const hostId = this.session.hostId;
     const rows: ScoreRow[] = [];
     const add = (info: PlayerInfo, isSelf: boolean) => {
-      const line = scores[info.id];
+      const line = scores?.[info.id];
       rows.push({
         id: info.id, name: info.name, color: this.colorOf(info.id), team: this.teamOf(info.id),
         splashes: line?.splashes ?? 0, soaked: line?.soaked ?? 0, isSelf, isBot: info.isBot,
@@ -964,13 +1027,18 @@ export class Game extends Emitter<GameEvents> {
   }
 
   private updateHud(dt: number, refilling: boolean, now: number): void {
-    const state = this.matchHost?.snapshot() ?? this.matchView.state;
+    // 매 프레임 경로라 경기 상태는 복사 없이 읽는다(복사본 snapshot() 은 보낼 때만)
+    const state = this.matchHost?.view() ?? this.matchView.state;
     const self = this.session.selfId;
     const mode = this.mode();
-    const scores = state?.scores ?? {};
-    const myLine = scores[self];
-    const leader = Math.max(0, ...Object.values(scores).map((l) => l.splashes));
-    const timerMs = this.matchHost ? this.matchHost.snapshot().remainingMs : this.matchView.remainingMs(now);
+    const scores = state?.scores;
+    const myLine = scores?.[self];
+    let leader = 0;
+    if (scores) for (const id in scores) leader = Math.max(leader, scores[id].splashes);
+    const timerMs = this.matchHost ? this.matchHost.remainingMs : this.matchView.remainingMs(now);
+    const teamScores = this.hudTeamScores;
+    teamScores[0] = state?.teamScores[0] ?? 0;
+    teamScores[1] = state?.teamScores[1] ?? 0;
     this.hud.update({
       soak: this.vit.soak / PLAYER.maxSoak,
       tank: this.arsenal.tank / TANK.capacity,
@@ -987,15 +1055,26 @@ export class Game extends Emitter<GameEvents> {
       mode,
       myScore: myLine?.splashes ?? 0,
       leaderScore: leader,
-      teamScores: state?.teamScores ?? [0, 0],
+      teamScores,
       myTeam: this.teamOf(self),
       roomLabel: this.opts.roomLabel,
-      playerCount: this.humanCount() + this.bots.size + [...this.remotes.values()].filter((r) => r.info.isBot).length,
+      // 나 + 원격(사람, 손님이면 호스트의 봇까지) + 내 봇(호스트일 때)
+      playerCount: 1 + this.remotes.size + this.bots.size,
       moveState: this.movementState(this.body),
     }, dt);
-    const rows = this.scoreRows();
-    const inResults = state?.phase === 'results';
-    this.hud.setScoreboard(!inResults && this.input.isDown('Tab'), rows, mode);
+    const phase = state?.phase ?? null;
+    const inResults = phase === 'results';
+    const showBoard = !inResults && this.input.isDown('Tab');
+    // 점수판을 열거나 단계가 바뀌면(마지막 쓰러짐으로 결과 화면) 바로, 그 밖에는 0.25초마다 새로 만든다
+    this.rowsAge += dt;
+    if (this.rowsAge >= 0.25 || showBoard !== this.rowsBoard || phase !== this.rowsPhase) {
+      this.rows = this.scoreRows(state);
+      this.rowsAge = 0;
+      this.rowsBoard = showBoard;
+      this.rowsPhase = phase;
+    }
+    const rows = this.rows;
+    this.hud.setScoreboard(showBoard, rows, mode);
     if (inResults && state) {
       let title = '경기 종료!';
       if (state.winner === 'team0' || state.winner === 'team1') title = `${state.winner === 'team0' ? '탠저린' : '그레이프'} 팀 승리! 🎉`;
@@ -1011,8 +1090,9 @@ export class Game extends Emitter<GameEvents> {
   // ================================================================ debug
 
   private installDebug(): void {
-    const enabled = import.meta.env.DEV || new URLSearchParams(location.search).has('debug');
-    if (!enabled) return;
+    // DEV 빌드(개발 서버)에서만. 프로덕션에서는 주소 쿼리로도 열 수 없다(순간이동·자동 조준이 되므로).
+    // tests/e2e·tools 는 개발 서버를 쓰므로 그대로 동작한다
+    if (!import.meta.env.DEV) return;
     const api: DebugApi = {
       state: () => ({
         selfId: this.session.selfId,

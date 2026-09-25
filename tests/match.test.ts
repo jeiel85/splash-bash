@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { MatchHost, MatchView } from '../src/game/match';
-import { MATCH } from '../src/config';
+import { describe, expect, it, vi } from 'vitest';
+import { MatchHost, MatchView, nameTagColor, pickBotColor, playerColor } from '../src/game/match';
+import { mulberry32 } from '../src/core/rng';
+import { MATCH, PLAYER_COLORS, TEAM_COLORS } from '../src/config';
 import type { MatchState } from '../src/types';
 
 const DURATION = MATCH.durationSec * 1000;
@@ -217,5 +218,106 @@ describe('MatchView', () => {
     expect(v.apply(st({ round: 3, phase: 'results' }), 30)).toBe(true);
     expect(v.apply(st({ round: 2, hostId: 'h2' }), 40)).toBe(true);
     expect(v.state?.hostId).toBe('h2');
+  });
+});
+
+describe('MatchHost — 매 프레임 읽기(복사 없음)', () => {
+  it('view() 는 복사하지 않고 최신 점수·남은 시간을 보여 준다, snapshot() 은 여전히 독립 복사본', () => {
+    const m = ffa();
+    const v = m.view();
+    expect(m.view()).toBe(v);
+    expect(v.remainingMs).toBe(DURATION);
+    m.tick(1500, ['a', 'b', 'c']);
+    expect(m.remainingMs).toBe(DURATION - 1500);
+    expect(m.view().remainingMs).toBe(DURATION - 1500);
+    m.recordSplash('b', 'a');
+    expect(v.scores.a.splashes).toBe(1);
+    const snap = m.snapshot();
+    expect(snap).toEqual(m.view());
+    expect(snap.scores).not.toBe(v.scores);
+    expect(snap.teamScores).not.toBe(v.teamScores);
+    snap.scores.a.splashes = 99;
+    expect(m.view().scores.a.splashes).toBe(1);
+  });
+
+  it('view() 는 다음 경기로 넘어가도 새 점수판을 가리킨다', () => {
+    const m = new MatchHost('tdm', 'a');
+    for (const id of ['a', 'b']) m.addPlayer(id);
+    m.recordSplash('a', 'b');
+    const v = m.view();
+    expect(v.teamScores).toEqual([0, 1]);
+    m.tick(DURATION, ['a', 'b']);
+    m.tick(RESULTS, ['a', 'b']);
+    expect(m.view().round).toBe(2);
+    expect(m.view().teamScores).toEqual([0, 0]);
+    expect(m.view().scores.b).toEqual({ splashes: 0, soaked: 0, team: 1 });
+  });
+
+  it('tick 의 참가자 목록 함수는 다음 경기로 넘어갈 때만 불린다(매 프레임 배열 할당 없음)', () => {
+    const m = ffa(['a', 'b']);
+    const ids = vi.fn(() => ['a', 'c']);
+    for (let i = 0; i < 100; i++) m.tick(16, ids);
+    expect(ids).not.toHaveBeenCalled();
+    m.tick(DURATION, ids);
+    expect(m.phase).toBe('results');
+    expect(ids).not.toHaveBeenCalled();
+    m.tick(RESULTS, ids);
+    expect(ids).toHaveBeenCalledTimes(1);
+    expect(Object.keys(m.view().scores).sort()).toEqual(['a', 'c']);
+  });
+
+  it('has: 등록 여부(객체 기본 속성 이름과 헷갈리지 않음)', () => {
+    const m = ffa(['a']);
+    expect(m.has('a')).toBe(true);
+    expect(m.has('b')).toBe(false);
+    expect(m.has('toString')).toBe(false);
+    m.removePlayer('a');
+    expect(m.has('a')).toBe(false);
+  });
+});
+
+describe('색 결정', () => {
+  it('팀전은 팀이 정해진 뒤에만 팀 색, 개인전·팀 미정은 꾸미기 색', () => {
+    expect(playerColor('tdm', 0, 5)).toBe(TEAM_COLORS[0]);
+    expect(playerColor('tdm', 1, 0)).toBe(TEAM_COLORS[1]);
+    expect(playerColor('tdm', -1, 5)).toBe(PLAYER_COLORS[5]);
+    expect(playerColor('ffa', 1, 5)).toBe(PLAYER_COLORS[5]);
+    expect(playerColor('ffa', -1, undefined)).toBe(PLAYER_COLORS[0]);
+    expect(playerColor('ffa', -1, 99)).toBe(PLAYER_COLORS[0]);
+    expect(nameTagColor('tdm', 1)).toBe(TEAM_COLORS[1]);
+    expect(nameTagColor('tdm', -1)).toBe('#ffffff');
+    expect(nameTagColor('ffa', 0)).toBe('#ffffff');
+  });
+
+  it('회귀(QA P2-1): 호스트가 참가자를 먼저 등록해야 팀전 새 참가자가 처음부터 팀 색', () => {
+    const m = new MatchHost('tdm', 'host');
+    m.addPlayer('host'); // 탠저린
+    const cosmetic = 0; // 꾸미기 색이 탠저린과 같은 사람이 그레이프 팀에 들어오는 경우
+    // 등록 전에 모습을 만들면 꾸미기 색(= 탠저린 팀 색)으로 보인다 — 예전 버그
+    expect(playerColor(m.mode, m.teamOf('guest'), cosmetic)).toBe(TEAM_COLORS[0]);
+    m.addPlayer('guest');
+    expect(playerColor(m.mode, m.teamOf('guest'), cosmetic)).toBe(TEAM_COLORS[1]);
+    expect(nameTagColor(m.mode, m.teamOf('guest'))).toBe(TEAM_COLORS[1]);
+  });
+
+  it('pickBotColor: 쓰이지 않은 색만 고르고, 모두 쓰였으면 가장 적게 쓰인 색에서', () => {
+    const rnd = mulberry32(7);
+    for (let i = 0; i < 200; i++) expect([0, 1, 2]).not.toContain(pickBotColor([0, 1, 2], rnd));
+    // 남은 색이 하나면 그 색
+    expect(pickBotColor([0, 1, 2, 3, 4, 5, 6], rnd)).toBe(7);
+    // 모두 한 번씩 쓰였으면 두 번 쓰인 색은 피한다
+    const all = [0, 1, 2, 3, 4, 5, 6, 7, 3, 3, 5];
+    for (let i = 0; i < 200; i++) expect([3, 5]).not.toContain(pickBotColor(all, rnd));
+    // 범위 밖 값은 무시, rnd 가 1 에 가까워도 범위 안
+    expect(pickBotColor([-1, 42], () => 0.9999999)).toBe(PLAYER_COLORS.length - 1);
+  });
+
+  it('pickBotColor: 사람 1명 + 봇 5명을 채우면 모두 다른 색(시드 여러 개)', () => {
+    for (let seed = 1; seed <= 50; seed++) {
+      const rnd = mulberry32(seed);
+      const used = [seed % PLAYER_COLORS.length];
+      for (let b = 0; b < MATCH.botFillTo - 1; b++) used.push(pickBotColor(used, rnd));
+      expect(new Set(used).size).toBe(used.length);
+    }
   });
 });

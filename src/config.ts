@@ -35,14 +35,21 @@ export const PLAYER = {
   waterSpeedScale: 0.7,
 } as const;
 
+/**
+ * 슬라이드(Krunker 식): 달리다 누르면 확 빨라졌다가 줄어든다.
+ * 걷기(6 m/s)에서 시작하면 9.6 → 6.4 m/s, 0.8초에 6.4 m(걷기 4.8 m 의 1.33배).
+ * QA 플레이테스트에서 1.25 / 7.5 / 3 은 1초 이동이 걷기보다 3% 길 뿐이라 체감이 없었다.
+ */
 export const SLIDE = {
+  /** 이 속도(m/s) 이상으로 달릴 때만 */
   minSpeed: 4.5,
-  boost: 1.25,
-  minSlideSpeed: 7.5,
-  maxSpeed: 9.0,
+  /** 시작 속도 = max(지금 속도 × boost, minSlideSpeed), 최대 maxSpeed */
+  boost: 1.6,
+  minSlideSpeed: 9.5,
+  maxSpeed: 11,
   duration: 0.8,
-  /** 슬라이드 중 감속(m/s²) */
-  decel: 3,
+  /** 슬라이드 중 감속(m/s²) — 끝날 때 걷기 속도 조금 위로 떨어져 자연스럽게 이어진다 */
+  decel: 4,
   /** 슬라이드 중 방향 전환 한계(라디안/초) */
   steer: (60 * Math.PI) / 180,
   cooldown: 0.6,

@@ -23,6 +23,33 @@ export interface Transport {
 }
 
 /**
+ * 시그널링용 공개 Nostr 릴레이. 모든 피어가 같은 목록을 써야 서로 만나고, Trystero 는 목록의 모든 릴레이에 붙는다
+ * (한두 곳이 죽어도 나머지로 만난다).
+ *
+ * 명시하는 이유(QA P2-3): 목록을 주지 않으면 Trystero 가 appId 로 기본 목록에서 5곳을 뽑는데, 이 앱에는
+ * relay-rpi.edufeed.org(임시 이벤트 거부 — 매 세션 경고)와 staging.yabu.me(스테이징 서버)가 걸려 실제로는 3곳만 믿을 만했다.
+ *
+ * 검증: 2026-09-26, 개발 PC(Windows 11, Playwright Chromium). 릴레이 하나만 설정한 두 브라우저가 Trystero 방에 들어가
+ *   연결 + 메시지 왕복까지 성공한 곳만 골랐다(tools/check-relays.mjs 와 같은 방법). 후보 54곳(Trystero 0.25.4
+ *   defaultRelayUrls 28 + 잘 알려진 공개 릴레이 26) × 2회 중 25곳 통과, 그중 연결이 빠르고(1~2.5초) 가입·신뢰망 조건이 없는
+ *   6곳을 골라 tools/check-relays.mjs --rounds 2 로 다시 확인(6/6). 탈락 예: 임시 이벤트·종류 차단
+ *   (relay-rpi.edufeed.org, relay.nostr.wirednet.jp, relay.nos.social), 신뢰망·NIP-05·가입 요구(offchain.pub,
+ *   nostr.einundzwanzig.space, nostr.wine), 속도 제한(relay.damus.io), 무응답(relay.nostr.band 등).
+ *   스테이징·시험용(staging.yabu.me, top.testrelay.top)은 통과해도 뺐다.
+ *   이전 버전과도 만나도록 예전 자동 선택 중 통과한 3곳(sathoarder·corb·basspistol)을 유지한다.
+ * 갱신: `node tools/check-relays.mjs`(이 목록 점검, 4곳 미만 통과면 실패) / `--candidates --rounds 2`(후보 전체).
+ *   목록을 바꿀 때는 예전 빌드와도 같은 방에서 만날 수 있게 기존 릴레이를 절반 이상 남긴다.
+ */
+export const SIGNALING_RELAYS: readonly string[] = [
+  'wss://nostr.sathoarder.com',
+  'wss://nostr-relay.corb.net',
+  'wss://basspistol.org',
+  'wss://nostr-01.yakihonne.com',
+  'wss://purplerelay.com',
+  'wss://bucket.coracle.social',
+];
+
+/**
  * TURN 서버 설정(선택). 대칭형 NAT 뒤의 플레이어끼리는 STUN 만으로 연결이 안 될 수 있다.
  * 빌드 시 VITE_TURN_URLS(쉼표 구분), VITE_TURN_USERNAME, VITE_TURN_CREDENTIAL 로 넣는다.
  */
@@ -50,7 +77,7 @@ export class TrysteroTransport implements Transport {
 
   constructor(roomId: string, password?: string) {
     this.room = joinRoom(
-      { appId: NET.appId, password, turnConfig: turnConfigFromEnv() },
+      { appId: NET.appId, password, turnConfig: turnConfigFromEnv(), relayConfig: { urls: [...SIGNALING_RELAYS] } },
       roomId,
       { onJoinError: (e) => this.onError?.(`방 참가 오류: ${e.error}`) },
     );

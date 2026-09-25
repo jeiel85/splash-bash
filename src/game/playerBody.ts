@@ -102,9 +102,10 @@ export class PlayerBody {
     // forward = (-sin, 0, -cos), right = (cos, 0, -sin)
     _wish.set(-sin * mz + cos * mx, 0, -cos * mz - sin * mx).multiplyScalar(PLAYER.walkSpeed * this.speedScale * back);
 
-    // 슬라이드 시작
+    // 슬라이드 시작. 바닥 판정은 코요테 타임만큼 너그럽게(작은 턱·경사 꼭대기에서 한 프레임 뜬 순간에 누른 입력도 받는다)
     const hSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-    if (intent.slidePressed && this.grounded && this.slideTime <= 0 && this.slideCooldown <= 0 && hSpeed >= SLIDE.minSpeed && this.speedScale >= 1) {
+    const footing = this.grounded || this.coyote > 0;
+    if (intent.slidePressed && footing && this.slideTime <= 0 && this.slideCooldown <= 0 && hSpeed >= SLIDE.minSpeed && this.speedScale >= 1) {
       this.slideTime = SLIDE.duration;
       this.slideSpeed = Math.min(SLIDE.maxSpeed, Math.max(hSpeed * SLIDE.boost, SLIDE.minSlideSpeed));
       this.slideDir.set(this.velocity.x / hSpeed, 0, this.velocity.z / hSpeed);
@@ -126,7 +127,8 @@ export class PlayerBody {
       }
       this.velocity.x = this.slideDir.x * this.slideSpeed;
       this.velocity.z = this.slideDir.z * this.slideSpeed;
-      if (this.slideTime <= 0 || !this.grounded) {
+      // 한 프레임 바닥을 놓친 것(턱·경사 꼭대기)으로는 끊지 않고, 코요테 타임보다 오래 떠 있을 때만 끝낸다(수평 관성은 유지)
+      if (this.slideTime <= 0 || !footing) {
         this.slideTime = 0;
         this.slideCooldown = SLIDE.cooldown;
       }

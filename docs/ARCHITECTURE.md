@@ -62,8 +62,9 @@ index.html → src/main.ts (부팅·메뉴·방 참가·메인 루프)
 
 ## 개발 도구
 
-- `npm run dev` — 개발 서버(127.0.0.1:5317). `?map=test` 시험장, `?bots=0` 봇 없음, `?autoquality=0` 자동 품질 끔, DEV 빌드는 `window.__splash`·`window.__render` 디버그 API
+- `npm run dev` — 개발 서버(127.0.0.1:5317). `?map=test` 시험장, `?bots=0` 봇 없음, `?autoquality=0` 자동 품질 끔, DEV 빌드는 `window.__splash`·`window.__render` 디버그 API(프로덕션 빌드에는 없음)와 `?pause=0`(포인터 잠금이 풀려도 연습 모드를 멈추지 않음 — 자동화 스크린샷용)
 - `npm run test:e2e` — 실제 Trystero·공개 Nostr 릴레이로 여러 브라우저를 띄워 연결·동기화·명중·호스트 이전·두 호스트 합치기·팀전을 검증(자체 Vite 서버 5319 를 띄움, 인터넷 필요)
 - `npm test` — 단위·규약·맵 검증 테스트, `npm run typecheck`
 - `npm run assets` — Blender 로 모든 GLB 재생성 (`docs/ASSETS.md`)
 - `node tools/screenshot.mjs`, `node tools/ingame-shot.mjs` — 에셋/인게임 스크린샷
+- `node tools/check-relays.mjs [--candidates] [--rounds N]` — 시그널링 릴레이 실측(릴레이 하나만 쓰는 두 브라우저가 연결·메시지 왕복). 목록은 `src/net/transport.ts` 의 `SIGNALING_RELAYS`(인터넷 필요)
