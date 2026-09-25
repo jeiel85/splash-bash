@@ -70,6 +70,49 @@ function makeMesh(mat: THREE.ShaderMaterial, name: string): THREE.Mesh {
 const NAME_FONT_PX = 44;
 const NAME_FONT = `${NAME_FONT_PX}px Jua, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif`;
 const NAME_HEIGHT = 0.34;
+const NAME_CANVAS_H = 68;
+/** 캔버스 좌우 여백(px, 외곽선 두께 포함) */
+const NAME_PAD = 44;
+
+/**
+ * 이름표 글자 폭 상한(px, 44px 글꼴 기준). 한글 14자(≈ 512px)는 그대로 들어가고, 월드 폭은 ≈ 3 m 를 넘지 않는다.
+ * 닉네임은 UTF-16 14칸만 제한하므로 아주 넓은 글자(﷽ 등)로 21 m 띠·4000px 텍스처를 만들 수 있었다.
+ */
+export const NAME_MAX_TEXT_PX = 560;
+/** 가로로 좁혀 맞추는 한도. 이보다 더 좁혀야 하면 못 읽으므로 뒤를 말줄임한다 */
+const NAME_MIN_SQUEEZE = 0.6;
+
+export interface NameFit {
+  /** 그릴 글자(넘치면 말줄임) */
+  text: string;
+  /** 그릴 폭(px, 상한 이하). 실제 글자가 더 넓으면 fillText 의 maxWidth 로 가로로 좁혀 그린다 */
+  width: number;
+}
+
+function graphemes(text: string): string[] {
+  const Seg = (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+  // 글자 단위(자모 조합·이모지 ZWJ 를 가르지 않게). 없으면 코드 포인트 단위(서로게이트 쌍은 지킨다)
+  return Seg ? Array.from(new Seg(undefined, { granularity: 'grapheme' }).segment(text), (s) => s.segment) : Array.from(text);
+}
+
+/**
+ * 이름표에 그릴 글자와 폭. 상한까지는 그대로, 조금 넘으면 가로로 좁히고(최대 NAME_MIN_SQUEEZE),
+ * 그래도 넘으면 뒤를 "…" 로 줄인다. 이름을 바꿀 때만 불리므로 할당은 괜찮다.
+ */
+export function fitNameText(text: string, measure: (s: string) => number, maxPx = NAME_MAX_TEXT_PX): NameFit {
+  const squeezeLimit = maxPx / NAME_MIN_SQUEEZE;
+  let t = text;
+  let w = measure(t);
+  if (w > squeezeLimit) {
+    const g = graphemes(text);
+    for (let n = g.length - 1; n >= 1; n--) {
+      t = `${g.slice(0, n).join('')}…`;
+      w = measure(t);
+      if (w <= squeezeLimit) break;
+    }
+  }
+  return { text: t, width: Math.min(w, maxPx) };
+}
 
 /** 닉네임 이름표. 글꼴(Jua)이 아직 안 불러와졌으면 불러온 뒤 한 번 다시 그린다. */
 export class NamePlate {
@@ -138,8 +181,9 @@ export class NamePlate {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('2D 캔버스를 만들 수 없습니다');
     ctx.font = NAME_FONT;
-    const w = Math.ceil(ctx.measureText(this.text).width) + 44;
-    const h = 68;
+    const fit = fitNameText(this.text, (s) => ctx.measureText(s).width);
+    const w = Math.ceil(fit.width) + NAME_PAD;
+    const h = NAME_CANVAS_H;
     this.canvas.width = w;
     this.canvas.height = h;
     ctx.font = NAME_FONT;
@@ -148,9 +192,10 @@ export class NamePlate {
     ctx.lineJoin = 'round';
     ctx.lineWidth = 10;
     ctx.strokeStyle = 'rgba(43,45,66,0.9)';
-    ctx.strokeText(this.text, w / 2, h / 2 + 2);
+    // maxWidth: 상한보다 넓은 글자는 브라우저가 가로로 좁혀 그린다(캔버스·월드 폭이 상한을 넘지 않게)
+    ctx.strokeText(fit.text, w / 2, h / 2 + 2, fit.width);
     ctx.fillStyle = this.color;
-    ctx.fillText(this.text, w / 2, h / 2 + 2);
+    ctx.fillText(fit.text, w / 2, h / 2 + 2, fit.width);
     this.texture.dispose();
     this.texture.needsUpdate = true;
     (this.material.uniforms.uSize.value as THREE.Vector2).set((w / h) * NAME_HEIGHT, NAME_HEIGHT);

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:e2e": "node tests/e2e/multiplayer.mjs",
-    "assets": "node tools/build-assets.mjs"
+    "assets": "node tools/build-assets.mjs",
+    "licenses": "node tools/licenses.mjs"
   },
   "dependencies": {
     "@fontsource/jua": "^5.3.0",

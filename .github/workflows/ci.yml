@@ -39,5 +39,8 @@ jobs:
       - name: Unit, contract and map tests
         run: npx vitest run
 
+      - name: Third-party license notice is up to date
+        run: node tools/licenses.mjs --check
+
       - name: Build
         run: npx vite build

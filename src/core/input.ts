@@ -28,10 +28,54 @@ export function emptyIntent(): Intent {
   return { moveX: 0, moveZ: 0, jump: false, jumpPressed: false, slidePressed: false, fire: false, firePressed: false, throwPressed: false, weaponSlot: null, weaponCycle: 0 };
 }
 
+/** 포인터 잠금 실패 이유: unsupported = 이 브라우저에 API 가 없음, failed = 요청이 거부됨 */
+export type LockFailure = 'unsupported' | 'failed';
+
 interface InputEvents {
   lockchange: (locked: boolean) => void;
+  /** requestLock 이 실패했다(거부·API 없음). 성공하면 lockchange 가 온다 */
+  lockerror: (reason: LockFailure) => void;
   /** 포인터 락 여부와 무관한 단축키(Tab, Esc 등) */
   key: (code: string, down: boolean) => void;
+}
+
+// ---------------------------------------------------------------- 입력 기기 확인
+
+/** 조작 가능 여부를 가르는 브라우저 환경(테스트에서 직접 만들 수 있게 값으로 둔다) */
+export interface PointerEnv {
+  /** Element.requestPointerLock 이 있다 */
+  pointerLock: boolean;
+  /** 마우스·터치패드 같은 정밀 포인터가 하나라도 있다((any-pointer: fine)) */
+  anyFine: boolean;
+  /** 터치 같은 거친 포인터가 있다((any-pointer: coarse)) */
+  anyCoarse: boolean;
+}
+
+function mediaMatches(query: string): boolean {
+  try {
+    return typeof matchMedia === 'function' && matchMedia(query).matches;
+  } catch {
+    return false;
+  }
+}
+
+/** 지금 브라우저의 포인터 환경을 읽는다 */
+export function readPointerEnv(): PointerEnv {
+  const proto = typeof Element === 'undefined' ? null : (Element.prototype as Partial<Element>);
+  return {
+    pointerLock: typeof proto?.requestPointerLock === 'function',
+    anyFine: mediaMatches('(any-pointer: fine)'),
+    anyCoarse: mediaMatches('(any-pointer: coarse)'),
+  };
+}
+
+/**
+ * 키보드·마우스로 할 수 있는 환경인지. 포인터 잠금 API 가 없거나(iOS Safari·인앱 브라우저),
+ * 터치만 있고 정밀 포인터가 없으면(휴대폰·태블릿) 조준할 방법이 없다.
+ * any-pointer 를 모르는 옛 브라우저는 두 값이 모두 false 라 막지 않는다(잘못 막는 쪽을 피한다).
+ */
+export function canPlayWithMouse(env: PointerEnv): boolean {
+  return env.pointerLock && !(env.anyCoarse && !env.anyFine);
 }
 
 /** 키보드·마우스 입력 수집기. 키는 레이아웃과 무관한 KeyboardEvent.code 로 다룬다(한글 자판 안전). */
@@ -46,6 +90,11 @@ export class Input extends Emitter<InputEvents> {
   private lookY = 0;
   private wheel = 0;
   private _locked = false;
+  /**
+   * 진행 중인 잠금 요청이 결과를 알리는 방식: promise = 요즘 브라우저(거부되면 reject),
+   * event = Promise 를 돌려주지 않는 옛 브라우저(document 'pointerlockerror' 로만 안다)
+   */
+  private lockWait: 'none' | 'promise' | 'event' = 'none';
   private readonly disposers: Array<() => void> = [];
 
   constructor(private readonly element: HTMLElement) {
@@ -88,8 +137,14 @@ export class Input extends Emitter<InputEvents> {
     }, { passive: true });
     on(document, 'pointerlockchange', () => {
       this._locked = document.pointerLockElement === this.element;
-      if (!this._locked) this.releaseAll();
+      if (this._locked) this.lockWait = 'none';
+      else this.releaseAll();
       this.emit('lockchange', this._locked);
+    });
+    // Promise 를 돌려주는 브라우저는 거기서 실패를 받는다. 원시 입력 옵션이 거부돼 옵션 없이 다시 요청하는 사이에
+    // 오는 이 이벤트를 실패로 오인하지 않도록, 이벤트로만 결과를 아는 옛 브라우저의 요청일 때만 쓴다
+    on(document, 'pointerlockerror', () => {
+      if (this.lockWait === 'event') this.lockFailed('failed', null);
     });
     on(window as unknown as Document, 'blur', () => this.releaseAll());
     on(document, 'contextmenu', (e) => {
@@ -101,23 +156,46 @@ export class Input extends Emitter<InputEvents> {
     return this._locked;
   }
 
+  /** 포인터 잠금을 요청한다. 실패하면(거부·API 없음) 'lockerror' 로 알린다 — 화면에 안내와 나가는 길을 보이도록 */
   requestLock(): void {
     if (this._locked) return;
-    const fallback = () => {
+    if (typeof (this.element as Partial<HTMLElement>).requestPointerLock !== 'function') {
+      this.lockFailed('unsupported', null);
+      return;
+    }
+    const plain = () => {
       try {
-        const p = this.element.requestPointerLock?.() as unknown as Promise<void> | undefined;
-        p?.catch?.((err: unknown) => console.warn('[input] 포인터 락 실패', err));
+        this.track(this.element.requestPointerLock(), (err) => this.lockFailed('failed', err));
       } catch (err) {
-        console.warn('[input] 포인터 락 실패', err);
+        this.lockFailed('failed', err);
       }
     };
     try {
-      const req = this.element.requestPointerLock?.({ unadjustedMovement: true } as never) as unknown as Promise<void> | undefined;
-      // unadjustedMovement(원시 입력) 미지원 브라우저는 옵션 없이 재시도
-      req?.catch?.(fallback);
+      // unadjustedMovement(원시 입력)를 거부하는 브라우저는 옵션 없이 한 번 더
+      this.track(this.element.requestPointerLock({ unadjustedMovement: true } as never), plain);
     } catch {
-      fallback();
+      plain();
     }
+  }
+
+  /** 요청 결과 추적: Promise 면 거부될 때 onReject, 아니면(옛 브라우저) document 'pointerlockerror' 를 기다린다 */
+  private track(result: unknown, onReject: (err: unknown) => void): void {
+    const p = result as PromiseLike<void> | undefined;
+    if (p && typeof p.then === 'function') {
+      this.lockWait = 'promise';
+      p.then(() => {
+        if (this.lockWait === 'promise') this.lockWait = 'none';
+      }, onReject);
+    } else {
+      this.lockWait = 'event';
+    }
+  }
+
+  private lockFailed(reason: LockFailure, err: unknown): void {
+    this.lockWait = 'none';
+    if (this._locked) return;
+    if (err !== null) console.warn('[input] 포인터 잠금 실패', err);
+    this.emit('lockerror', reason);
   }
 
   exitLock(): void {

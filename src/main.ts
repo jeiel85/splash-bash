@@ -1,7 +1,7 @@
 import '@fontsource/jua';
 import './ui/styles.css';
 import { MATCH, NET } from './config';
-import { Input } from './core/input';
+import { canPlayWithMouse, Input, readPointerEnv } from './core/input';
 import { FrameClock, simulationPaused } from './core/loop';
 import { Sfx } from './audio/sfx';
 import { RenderContext } from './render/renderer';
@@ -20,6 +20,9 @@ const ui = document.getElementById('ui')!;
 
 /** 사용자에게 그대로 보여 줄 수 있는 오류(메시지가 곧 안내 문구) */
 class FriendlyError extends Error {}
+
+/** 키보드·마우스(포인터 잠금)로 할 수 없는 기기에서 메뉴에 띄우는 안내 */
+const DEVICE_BLOCK_TEXT = '🖱️ 키보드·마우스가 있는 PC에서 하는 게임이에요. 이 기기에서는 온라인 방에 들어갈 수 없어요 — 초대 링크는 PC 브라우저로 열어 주세요.';
 
 /** 게임을 아예 시작할 수 없을 때(WebGL 없음 등) 전체 화면 안내 */
 function showFatal(title: string, detail: string): void {
@@ -174,8 +177,12 @@ function start(ctx: RenderContext): void {
   });
   const pause = new PauseMenu(ui, profile.settings, () => onProfile(profile), () => input.requestLock(), () => void leave(), sound);
   const connecting = new ConnectingOverlay(ui, () => connectAbort?.abort(), sound);
-  const prompt = new PlayPrompt(ui, () => input.requestLock(), sound);
+  const prompt = new PlayPrompt(ui, () => input.requestLock(), () => void leave(), sound);
   document.getElementById('boot')?.remove();
+
+  // 휴대폰·태블릿·포인터 잠금 없는 브라우저: 조작할 수 없으니 온라인 방에는 들이지 않는다(자리만 차지하고 멈춘 캐릭터가 됨)
+  const mouseReady = canPlayWithMouse(readPointerEnv());
+  if (!mouseReady) menu.setDeviceBlock(DEVICE_BLOCK_TEXT);
 
   applyUiScale();
   applySettings(profile);
@@ -222,6 +229,10 @@ function start(ctx: RenderContext): void {
     // 연습은 잠금이 풀린 동안 시뮬레이션이 멈춘다(step). 온라인은 멈출 수 없다고 카드에 알린다
     pause.show(!locked, game.roomCode, game.session.online);
   });
+  // 잠금 요청이 거부되거나 API 가 없으면 시작 안내에 이유를 보인다(같은 카드에 "메뉴로 나가기"가 있다)
+  input.on('lockerror', (reason) => {
+    if (game) prompt.lockFailed(reason);
+  });
 
   async function boot(): Promise<void> {
     menu.setBusy(true);
@@ -251,6 +262,11 @@ function start(ctx: RenderContext): void {
 
   async function play(choice: PlayChoice): Promise<void> {
     if (starting || game || !assets || !map) return;
+    if (!mouseReady && choice.kind !== 'practice') {
+      // 버튼은 막혀 있지만 다른 경로(정원 초과 후 다음 방 등)로 와도 온라인 방에는 들어가지 않는다
+      menu.setStatus(DEVICE_BLOCK_TEXT, 'error');
+      return;
+    }
     starting = true;
     const abort = new AbortController();
     connectAbort = abort;
@@ -333,6 +349,8 @@ function start(ctx: RenderContext): void {
       // 클릭 직후 짧은 시간 안이면 잠금이 되고, 아니면 "클릭해서 시작!" 안내가 남는다(연습은 클릭 때 이미 요청함)
       if (choice.kind !== 'practice') input.requestLock();
       prompt.show(true, roomCode);
+      // 잠금을 얻을 수 없는 기기(연습 모드로 들어온 휴대폰 등)는 누르기 전에 이유부터 보인다
+      if (!mouseReady) prompt.lockFailed('unsupported');
     }
     if (choice.kind === 'create') hud.toast(`방을 만들었어요! 코드 ${roomCode} · Esc → 초대 링크 복사 💌`, 7);
     else if (choice.kind === 'join' && transport.peers().length === 0) hud.toast('아직 아무도 없어요. 친구에게 방 코드를 알려 주세요!', 5);

@@ -78,7 +78,11 @@ export function parseSettings(raw: unknown): Settings {
   };
 }
 
-/** 로컬 저장소는 막혀 있을 수 있으므로(시크릿 모드 등) 실패해도 기본값으로 동작한다. */
+/**
+ * 로컬 저장소는 막혀 있을 수 있으므로(시크릿 모드 등) 실패해도 기본값으로 동작한다.
+ * 첫 방문(저장본 없음)·손상·예전 형식이면 정규화한 결과를 바로 저장한다. 그래야 꾸미기를 건드리지 않고
+ * 바로 플레이하는 사람도 자동 생성 닉네임·색이 다음 방문에 그대로라서 친구들이 같은 사람으로 알아본다.
+ */
 export function loadProfile(): Profile {
   const fallback: Profile = {
     name: randomName(),
@@ -90,9 +94,16 @@ export function loadProfile(): Profile {
   try {
     raw = localStorage.getItem(KEY);
   } catch (err) {
+    // 저장소 자체가 막혔으면 저장도 안 되므로 시도하지 않는다
     console.warn('[profile] 저장소를 읽을 수 없어 기본값으로 시작합니다', err);
     return fallback;
   }
+  const profile = parseProfile(raw, fallback);
+  if (JSON.stringify(profile) !== raw) saveProfile(profile);
+  return profile;
+}
+
+function parseProfile(raw: string | null, fallback: Profile): Profile {
   if (!raw) return fallback;
   let p: Partial<Profile>;
   try {

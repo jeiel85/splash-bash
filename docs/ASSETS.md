@@ -67,7 +67,7 @@
 - 각 노드 원점 = 모자 바닥 중앙(`HatAnchor` 에 그대로 붙임). 크기는 `character.glb` 머리에 맞춤.
 
 ### `weapons.glb`
-- 노드: `gun_pistol`(물총 권총), `gun_soaker`(대형 펌프식 슈퍼 물총), `gun_bucket`(양동이 블래스터 — 산탄형), `balloon`(물풍선)
+- 노드: `gun_pistol`(물총 권총), `gun_soaker`(콸콸 펌프 — 대형 펌프식 물총. 노드 이름은 내부 id 라 그대로 둔다), `gun_bucket`(양동이 블래스터 — 산탄형), `balloon`(물풍선)
 - 각 총: 원점 = 손잡이(쥐는 점), 정면 +Z. 자식 Empty `Muzzle` = 노즐 끝. 물탱크 메시는 머티리얼 `Water`, 이름 `Tank` 를 포함하도록(`gun_soaker_Tank` 처럼 접두 허용).
 - 장난감 플라스틱 느낌: 선명한 주황·노랑·청록·분홍 조합.
 - `balloon`: 원점 = 중심, 지름 ≈ 0.22 m, 묶인 꼭지 포함.

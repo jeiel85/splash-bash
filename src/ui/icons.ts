@@ -19,7 +19,7 @@ export const SOURCE_ICONS: Record<DamageSource, string> = {
     <circle cx="16.5" cy="7.4" r="5" fill="#4FD1E8" ${S}/>
     <ellipse cx="14.8" cy="5.8" rx="1.6" ry="1.1" ${SHINE}/>
     <path d="M17 17.5q1.2 3 3.6 2.4" fill="none" ${S}/>`),
-  // 슈퍼 소커: 긴 총열 + 큰 물탱크 + 펌프 손잡이
+  // 콸콸 펌프(내부 id soaker): 긴 총열 + 큰 물탱크 + 펌프 손잡이
   soaker: svg(`
     <rect x="5" y="15" width="6" height="10.5" rx="2.6" fill="#FF4F8B" ${S}/>
     <rect x="3" y="10.5" width="33" height="6" rx="3" fill="#FFD23F" ${S}/>

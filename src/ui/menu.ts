@@ -2,6 +2,7 @@ import { GAME_VERSION, PLAYER_COLORS } from '../config';
 import type { SfxName } from '../audio/sfx';
 import { HAT_IDS, type GameMode, type HatId } from '../types';
 import { sanitizeName } from '../net/protocol';
+import type { LockFailure } from '../core/input';
 import { inviteLink, normalizeRoomCode, roomCodeHint, SETTING_RANGES, type Profile, type Settings } from './profile';
 
 export type PlayChoice =
@@ -222,6 +223,11 @@ export class Menu {
   readonly stageSlot: HTMLDivElement;
   private readonly status: HTMLDivElement;
   private readonly buttons: HTMLButtonElement[] = [];
+  /** 온라인 방에 들어가는 버튼(키보드·마우스가 없는 기기에서는 막는다) */
+  private readonly onlineButtons = new Set<HTMLButtonElement>();
+  private onlineBlocked = false;
+  private busy = false;
+  private readonly deviceNote: HTMLDivElement;
   private readonly inviteBox: HTMLDivElement;
   private readonly inviteCode: HTMLSpanElement;
   private readonly quick: HTMLButtonElement;
@@ -307,25 +313,30 @@ export class Menu {
 
     // ---- 플레이
     const play = el('section', 'menu-card menu-play', grid);
+    // 키보드·마우스가 없는 기기 안내(초대 링크를 휴대폰으로 연 사람이 가장 먼저 보도록 맨 위)
+    this.deviceNote = el('div', 'menu-device hidden', play);
+    this.deviceNote.setAttribute('role', 'alert');
     this.inviteBox = el('div', 'menu-invite hidden', play);
     const invTop = el('div', 'menu-invite-top', this.inviteBox);
     el('span', '', invTop, '💌 초대받은 방');
     this.inviteCode = el('span', 'invite-code', invTop);
     // 문구 "참가" 는 tests/e2e/multiplayer.mjs 가 초대 링크 참가 버튼으로 찾는다(바꾸면 함께 고칠 것)
-    this.button(this.inviteBox, '참가', 'big primary', () => {
+    this.onlineButton(this.button(this.inviteBox, '참가', 'big primary', () => {
       if (this.invite) this.h.onPlay({ kind: 'join', code: this.invite });
-    });
+    }));
 
-    this.quick = this.button(play, '', 'big primary quick', () => this.h.onPlay({ kind: 'quick' }));
+    this.quick = this.onlineButton(this.button(play, '', 'big primary quick', () => this.h.onPlay({ kind: 'quick' })));
     el('span', 'btn-title', this.quick, '빠른 대전');
     el('span', 'btn-sub', this.quick, '바로 시작 · 사람이 적으면 봇이 채워요');
 
     const friends = el('div', 'menu-row', play);
-    this.button(friends, '방 만들기', 'secondary', () => this.h.onPlay({ kind: 'create', mode: profile.mode }));
-    this.button(friends, '코드로 참가', 'secondary', () => {
+    this.onlineButton(this.button(friends, '방 만들기', 'secondary', () => this.h.onPlay({ kind: 'create', mode: profile.mode })));
+    this.onlineButton(this.button(friends, '코드로 참가', 'secondary', () => {
       this.codeRow.classList.toggle('hidden');
       if (!this.codeRow.classList.contains('hidden')) this.codeInput.focus();
-    });
+    }));
+    // P2P 라 같은 방 사람끼리 IP 주소가 보인다(서버리스 구조의 한계) — 공개 방에 들어가기 전에 알린다
+    el('div', 'menu-note', play, '🔒 온라인은 브라우저끼리 직접 연결돼서 같은 방 사람에게 내 IP 주소가 보여요. 모르는 사람이 싫으면 방 만들기로 친구끼리!');
     this.codeRow = el('div', 'menu-join hidden', play);
     this.codeInput = el('input', 'menu-input code', this.codeRow);
     this.codeInput.placeholder = '방 코드';
@@ -345,7 +356,7 @@ export class Menu {
     this.codeInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') join();
     });
-    this.button(this.codeRow, '입장', 'secondary', join);
+    this.onlineButton(this.button(this.codeRow, '입장', 'secondary', join));
 
     this.button(play, '🤖 연습 모드 (봇과 대전)', 'ghost', () => this.h.onPlay({ kind: 'practice', mode: profile.mode }));
 
@@ -372,6 +383,11 @@ export class Menu {
     // ---- 아래: 조작 안내 + 설정
     const foot = el('footer', 'menu-foot', grid);
     controlsCard(foot);
+    // 번들한 오픈소스(three.js·Trystero·Jua 폰트 등) 고지. tools/licenses.mjs 가 만든 public/ 파일
+    const credits = el('a', 'menu-credits', foot, '크레딧·라이선스');
+    credits.href = 'third-party-licenses.txt';
+    credits.target = '_blank';
+    credits.rel = 'noopener';
     const gear = el('button', 'btn small ghost menu-gear', this.root, '⚙ 설정');
     gear.type = 'button';
     gear.addEventListener('click', () => this.openSettings(true));
@@ -438,8 +454,30 @@ export class Menu {
   }
 
   setBusy(busy: boolean): void {
-    this.buttons.forEach((b) => (b.disabled = busy));
+    this.busy = busy;
+    this.paintButtons();
     this.root.classList.toggle('busy', busy);
+  }
+
+  /**
+   * 키보드·마우스로 할 수 없는 기기(휴대폰·태블릿·포인터 잠금 없는 브라우저)면 안내를 띄우고 온라인 입장 버튼을 막는다.
+   * 들어가 봐야 조작할 수 없이 방 자리만 차지하고 다른 사람 화면에 멈춘 캐릭터로 보이기 때문이다. 연습 모드는 둔다.
+   */
+  setDeviceBlock(message: string | null): void {
+    this.onlineBlocked = !!message;
+    this.deviceNote.textContent = message ?? '';
+    this.deviceNote.classList.toggle('hidden', !message);
+    this.codeRow.classList.add('hidden');
+    this.paintButtons();
+  }
+
+  private onlineButton(b: HTMLButtonElement): HTMLButtonElement {
+    this.onlineButtons.add(b);
+    return b;
+  }
+
+  private paintButtons(): void {
+    for (const b of this.buttons) b.disabled = this.busy || (this.onlineBlocked && this.onlineButtons.has(b));
   }
 
   show(v: boolean): void {
@@ -545,12 +583,24 @@ export class ConnectingOverlay {
   }
 }
 
-/** 포인터 잠금이 없을 때: "클릭해서 시작!" + (방 코드가 있으면) 초대 카드 */
+/** 포인터 잠금을 못 얻었을 때 시작 안내에 띄우는 문구 */
+export const LOCK_FAILURE_TEXT: Record<LockFailure, string> = {
+  unsupported: '이 기기·브라우저에서는 마우스로 조준할 수 없어요. 키보드·마우스가 있는 PC 브라우저로 열어 주세요.',
+  failed: '마우스 잠금을 못 했어요 😢 다시 눌러 보고, 그래도 안 되면 메뉴로 나가 주세요.',
+};
+
+/**
+ * 포인터 잠금이 없을 때: "클릭해서 시작!" + (방 코드가 있으면) 초대 카드 + 메뉴로 나가기.
+ * 잠금을 끝내 못 얻는 기기(휴대폰·인앱 브라우저)에서도 이 화면에 갇히지 않도록 나가는 버튼을 늘 둔다.
+ */
 export class PlayPrompt {
   readonly root: HTMLDivElement;
   private readonly invite: InviteCard;
+  private readonly error: HTMLDivElement;
+  /** 이번 안내에서 시작 버튼을 눌렀는지(누르기 전의 자동 요청 실패는 알리지 않는다) */
+  private clicked = false;
 
-  constructor(parent: HTMLElement, onStart: () => void, sound: UiSound) {
+  constructor(parent: HTMLElement, onStart: () => void, onLeave: () => void, sound: UiSound) {
     // click-to-play: tools/ingame-shot.mjs 가 이 클래스로 안내를 숨긴다(호환 유지)
     this.root = el('div', 'overlay play-prompt click-to-play hidden', parent);
     const card = el('div', 'overlay-card', this.root);
@@ -558,14 +608,42 @@ export class PlayPrompt {
     start.type = 'button';
     start.addEventListener('click', () => {
       sound('click');
+      this.clicked = true;
+      this.error.classList.add('hidden');
       onStart();
     });
+    this.error = el('div', 'play-error hidden', card);
+    this.error.setAttribute('role', 'alert');
     controlsCard(card);
     this.invite = new InviteCard(card, sound);
+    const leave = el('button', 'btn ghost', card, '🚪 메뉴로 나가기');
+    leave.type = 'button';
+    leave.addEventListener('click', () => {
+      sound('back');
+      onLeave();
+    });
   }
 
   show(v: boolean, roomCode: string | null = null): void {
     this.root.classList.toggle('hidden', !v);
-    if (v) this.invite.set(roomCode);
+    if (v) {
+      this.invite.set(roomCode);
+      this.clicked = false;
+      this.error.classList.add('hidden');
+    }
+  }
+
+  /**
+   * 잠금 요청 실패를 알린다. 'failed' 는 사용자가 시작 버튼을 누른 뒤에만 보인다
+   * (입장 직후 사용자 동작 없이 한 자동 요청은 브라우저가 거절하는 게 정상이라 안내할 일이 아니다).
+   */
+  lockFailed(reason: LockFailure): void {
+    if (!this.visible || (reason === 'failed' && !this.clicked)) return;
+    this.error.textContent = LOCK_FAILURE_TEXT[reason];
+    this.error.classList.remove('hidden');
+  }
+
+  get visible(): boolean {
+    return !this.root.classList.contains('hidden');
   }
 }

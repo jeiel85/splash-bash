@@ -121,7 +121,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     cost: 4, recoilDeg: 1.2, moveScaleFiring: 1,
   },
   soaker: {
-    id: 'soaker', name: '슈퍼 소커',
+    id: 'soaker', name: '콸콸 펌프',
     interval: 0.1, automatic: true, pellets: 1,
     spreadDeg: 1.5, spreadMoving: 2, spreadAir: 4,
     speed: 40, straightTime: 0.25, life: 0.6, visualRadius: 0.075,
@@ -367,7 +367,7 @@ export const WATER_TINT = { base: '#BFF3FF', mix: 0.35 } as const;
 
 export const SOURCE_LABEL: Record<DamageSource, string> = {
   pistol: '퐁퐁 권총',
-  soaker: '슈퍼 소커',
+  soaker: '콸콸 펌프',
   bucket: '양동이 블래스터',
   balloon: '물풍선',
 };

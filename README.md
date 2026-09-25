@@ -13,7 +13,7 @@
 |---|---|
 | 이동 / 점프 / 슬라이드 | WASD / 스페이스 / Shift |
 | 발사 / 물풍선 | 마우스 왼쪽 / G (또는 마우스 오른쪽) |
-| 무기 선택 | 1 퐁퐁 권총 · 2 슈퍼 소커 · 3 양동이 블래스터 (휠) |
+| 무기 선택 | 1 퐁퐁 권총 · 2 콸콸 펌프 · 3 양동이 블래스터 (휠) |
 | 점수판 / 메뉴 | Tab / Esc |
 
 - 물을 맞으면 **젖음**이 오르고 100% 가 되면 "흠뻑 젖었다!" → 3초 뒤 부활. 한동안 안 맞으면 마릅니다.
@@ -34,7 +34,8 @@
 **알려진 한계**
 - 일부 회사·학교망이나 대칭형 NAT 끼리는 STUN 만으로 연결이 안 될 수 있습니다. TURN 서버가 있으면 빌드 시 `VITE_TURN_URLS`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` 로 지정하세요.
 - 서버가 없으므로 치트를 완전히 막을 수는 없습니다(형식·범위·권한 검증만 수행). 친구끼리 즐기는 캐주얼 게임을 전제로 합니다.
-- 키보드·마우스 전용(모바일 미지원).
+- **같은 방 사람끼리 IP 주소가 보입니다.** 브라우저끼리 WebRTC 로 직접 연결하므로, 공개 방인 빠른 대전에서는 모르는 사람에게도 내 공인 IP 가 전달됩니다. 원하지 않으면 **방 만들기**(코드 초대)로 아는 친구끼리 하세요. 메뉴의 빠른 대전 아래에도 같은 안내가 있습니다.
+- 키보드·마우스 전용(모바일 미지원). 휴대폰·태블릿이나 포인터 잠금(Pointer Lock)이 없는 브라우저로 열면 메뉴에 안내가 뜨고 온라인 방에는 들어가지 않습니다. 시작 안내("클릭해서 시작!")에서 마우스 잠금을 못 얻으면 이유와 "메뉴로 나가기"가 보입니다.
 
 ## 개발
 
@@ -44,6 +45,14 @@ npm run dev          # http://127.0.0.1:5317  (?map=test 시험장, ?bots=0 봇 
 npm test             # 단위·규약·맵 검증 테스트
 npm run test:e2e     # 실제 P2P 다중 브라우저 테스트(자체 서버를 띄움, 인터넷 필요)
 npm run build        # 타입 검사 + 정적 빌드(dist/)
+node tools/licenses.mjs          # 제3자 라이선스 고지(public/third-party-licenses.txt) 다시 만들기 — 런타임 의존성을 바꾸면 실행 후 커밋
+node tools/licenses.mjs --check  # 고지가 지금 빌드와 같은지만 확인(릴리스 전)
+```
+
+`npm run test:e2e`, `tools/screenshot.mjs`, `tools/ingame-shot.mjs`, `tools/check-relays.mjs` 는 Playwright 의 Chromium 을 씁니다. 처음 한 번 브라우저를 설치하세요.
+
+```bash
+npx playwright install chromium
 ```
 
 ### 에셋
@@ -59,4 +68,5 @@ node tools/screenshot.mjs "/dev/viewer.html?file=character.glb" out.png   # 에�
 ## 크레딧
 
 - 폰트: [Jua](https://fonts.google.com/specimen/Jua) (SIL Open Font License, @fontsource/jua)
-- 라이브러리: three.js, three-mesh-bvh, Trystero, Vite
+- 라이브러리: three.js, three-mesh-bvh, Trystero(@trystero-p2p, @noble/secp256k1 포함), Vite
+- 배포 빌드에 들어가는 오픈소스의 저작권·라이선스 전문은 [public/third-party-licenses.txt](public/third-party-licenses.txt) 에 있고, 게임 메뉴 아래의 **크레딧·라이선스** 링크로도 볼 수 있습니다(`tools/licenses.mjs` 가 빌드 결과에서 생성).

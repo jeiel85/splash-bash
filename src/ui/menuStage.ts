@@ -259,10 +259,10 @@ export class MenuStage {
     }
     dist = Math.max(dist, CAM_DISTS[0]);
     const fov = THREE.MathUtils.radToDeg(Math.atan(vHalf) * 2);
-    if (Math.abs(cam.fov - fov) > 0.01) {
-      cam.fov = fov;
-      cam.updateProjectionMatrix();
-    }
+    // setFov 로 바꿔 외곽선 두께 단위(OUTLINE_SCREEN)도 메뉴 화각에 맞춘다. cam.fov 만 바꾸면 게임 FOV 설정
+    // 기준 두께가 남아 외곽선이 2~4배 두껍고 시야각 슬라이더를 따라 변한다. 설정 변경(applySettings)이 게임 FOV 로
+    // 되돌려도 다음 update 가 렌더 전에 다시 맞추고, 게임에 들어가면 applySettings 가 게임 값으로 돌려놓는다
+    if (Math.abs(cam.fov - fov) > 0.01) this.ctx.setFov(fov);
 
     // 아주 느린 호흡(움직임 줄이기면 멈춤)
     const drift = this.reduceMotion ? 0 : Math.sin(this.t * 0.4) * 0.12;
