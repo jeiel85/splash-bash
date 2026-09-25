@@ -1,13 +1,15 @@
 /**
  * 개발용 GLB 뷰어 — 게임과 같은 툰 파이프라인으로 에셋을 확인한다.
- *   /dev/viewer.html?file=character.glb[&node=gun_pistol][&tint=%23FF6F7D][&outline=0.012][&yaw=30][&pitch=15][&dist=3]
+ *   /dev/viewer.html?file=character.glb[&node=gun_pistol][&tint=%23FF6F7D][&outline=2.6][&yaw=30][&pitch=15][&dist=3]
+ * outline 은 외곽선 두께(1080p 기준 픽셀, 게임의 CHARACTER_OUTLINE 2.6 / PROP_OUTLINE 1.7). 조명·톤매핑은 게임(LOOK)과 같다.
  * node 를 생략하면 루트의 모든 자식을 한 줄로 나란히 배치한다(무기·모자 모음 파일용).
  * 로딩이 끝나면 window.__ready = true (Playwright 스크린샷 동기화용).
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { toonify } from '../src/render/toon';
+import { OUTLINE_SCREEN, TOON_TIME, makeToonMaterial, outlineScreenScale, toonify } from '../src/render/toon';
+import { LOOK } from '../src/render/renderer';
 
 declare global {
   interface Window { __ready?: boolean; __error?: string }
@@ -17,7 +19,7 @@ const q = new URLSearchParams(location.search);
 const file = q.get('file') ?? 'character.glb';
 const nodeName = q.get('node');
 const tint = q.get('tint') ?? '#FF6F7D';
-const outline = Number(q.get('outline') ?? '0.012');
+const outline = Number(q.get('outline') ?? '2.6');
 const info = document.getElementById('info')!;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -26,26 +28,30 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = LOOK.exposure;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#D4F1FF');
+scene.background = new THREE.Color(LOOK.skyHorizon);
 const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 500);
+OUTLINE_SCREEN.value = outlineScreenScale(camera.fov);
 const controls = new OrbitControls(camera, renderer.domElement);
 
-scene.add(new THREE.HemisphereLight('#EAF8FF', '#8BD66B', 1.4));
-const sun = new THREE.DirectionalLight('#FFF4E0', 2.2);
-sun.position.set(6, 10, 5);
+scene.add(new THREE.HemisphereLight(LOOK.hemi.sky, LOOK.hemi.ground, LOOK.hemi.intensity));
+const sun = new THREE.DirectionalLight(LOOK.sun.color, LOOK.sun.intensity);
+sun.position.copy(LOOK.sunOffset).normalize().multiplyScalar(12);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -8; sun.shadow.camera.right = 8;
 sun.shadow.camera.top = 8; sun.shadow.camera.bottom = -8;
 sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.02;
 scene.add(sun);
 
 const ground = new THREE.Mesh(
   new THREE.CircleGeometry(40, 48),
-  new THREE.MeshToonMaterial({ color: '#8BD66B' }),
+  makeToonMaterial({ color: '#8BD66B' }),
 );
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
@@ -125,7 +131,8 @@ new GLTFLoader().load(
   },
 );
 
-renderer.setAnimationLoop(() => {
+renderer.setAnimationLoop((t) => {
+  TOON_TIME.value = t / 1000;
   controls.update();
   renderer.render(scene, camera);
 });

@@ -131,12 +131,13 @@ export class Game extends Emitter<GameEvents> {
     this.projectiles = new ProjectileSystem(map.collision, {
       targets: () => this.targets,
       onHit: (shooter, victim, amount, source, dir) => this.onAuthoritativeHit(shooter, victim, amount, source, dir),
-      onImpact: (point, normal) => {
-        this.fx.impact(point, normal);
+      onImpact: (point, normal, _source, color) => {
+        this.fx.impact(point, normal, 1, color);
         if (point.distanceToSquared(this.body.position) < 100) this.sfx.play('impact', { pos: point, volume: 0.35 });
       },
-      onBodySplash: (point) => {
-        this.fx.bodyHit(point);
+      onBodySplash: (point, victim, _source, color) => {
+        this.fx.bodyHit(point, color);
+        (this.remotes.get(victim)?.avatar ?? this.bots.get(victim)?.avatar)?.hit(point);
         this.sfx.play('hit', { pos: point, volume: 0.5 });
       },
       onBurst: (point, shooter) => this.onBurst(point, shooter),
@@ -145,7 +146,7 @@ export class Game extends Emitter<GameEvents> {
     this.fx = new Fx(ctx.scene);
 
     this.body = new PlayerBody(map.collision);
-    this.viewmodel = new ViewModel(assets, ctx.camera, this.colorOf(this.session.selfId));
+    this.viewmodel = new ViewModel(assets, ctx, this.colorOf(this.session.selfId));
     this.viewmodel.setWeapon(this.arsenal.current);
 
     this.bindSession();
@@ -157,6 +158,7 @@ export class Game extends Emitter<GameEvents> {
     this.respawnLocal();
     this.hud.show(true);
     this.installDebug();
+    this.ctx.beginQualityProbe();
   }
 
   // ================================================================ lifecycle
@@ -173,14 +175,14 @@ export class Game extends Emitter<GameEvents> {
     if (this.disposed) return;
     this.disposed = true;
     this.disposers.forEach((d) => d());
-    this.projectiles.clear();
+    this.projectiles.dispose();
     for (const r of this.remotes.values()) r.avatar.dispose();
     for (const b of this.bots.values()) b.avatar.dispose();
     this.remotes.clear();
     this.bots.clear();
     this.ctx.scene.remove(this.map.root, this.projectiles.dropletMesh, this.projectiles.balloonMesh);
-    this.viewmodel.group.removeFromParent();
-    this.fx.clear();
+    this.viewmodel.dispose();
+    this.fx.dispose();
     this.hud.show(false);
     if ((window as unknown as { __splash?: unknown }).__splash) delete (window as unknown as { __splash?: unknown }).__splash;
     await this.session.close();
@@ -227,6 +229,8 @@ export class Game extends Emitter<GameEvents> {
     this.hud.toast(`${r.info.name} 님이 나갔어요`);
     r.avatar.dispose();
     this.remotes.delete(id);
+    // 떠난 사람에게 보낼 명중은 받을 권한자가 없다
+    this.pendingHits = this.pendingHits.filter((h) => h.victim !== id);
     if (this.matchHost) {
       this.matchHost.removePlayer(id);
       this.adjustBots();
@@ -245,8 +249,16 @@ export class Game extends Emitter<GameEvents> {
     }
     for (const info of infos) {
       const r = this.remotes.get(info.id);
-      if (!r) this.remotes.set(info.id, new RemoteActor(info, this.makeAvatar(info)));
-      else r.info = info;
+      if (!r) {
+        this.remotes.set(info.id, new RemoteActor(info, this.makeAvatar(info)));
+      } else if (r.info.name !== info.name || r.info.cosmetics.color !== info.cosmetics.color || r.info.cosmetics.hat !== info.cosmetics.hat) {
+        // 같은 id 의 다른 봇(호스트가 둘이었다가 합쳐진 경우): 모습을 바꾸고 이전 봇의 위치 기록은 버린다
+        r.info = info;
+        r.buffer.clear();
+        this.refreshAvatar(r);
+      } else {
+        r.info = info;
+      }
     }
   }
 
@@ -296,9 +308,10 @@ export class Game extends Emitter<GameEvents> {
       this.bots.set(id, bot);
       this.matchHost.addPlayer(id);
     }
+    // 받은 경기 상태에 남아 있던 떠난 사람(방금 나간 이전 호스트 등)은 점수판·우승 후보에서 뺀다
+    this.matchHost.retain([...this.session.players().map((p) => p.id), ...this.bots.keys()]);
     this.adjustBots();
     this.broadcastMatch();
-    this.session.sendBotInfos([...this.bots.values()].map((b) => b.info));
     this.lastRound = this.matchHost.snapshot().round;
     this.lastPhase = this.matchHost.phase;
     if (this.remotes.size > 0) this.hud.toast('방장이 되었어요 👑');
@@ -320,7 +333,9 @@ export class Game extends Emitter<GameEvents> {
     const want = this.opts.botFill ? Math.max(0, MATCH.botFillTo - this.humanCount()) : 0;
     let changed = false;
     while (this.bots.size < want) {
-      const n = this.botSeq++;
+      // 이어받은 봇(이전 호스트가 만든 bot-N)과 id 가 겹치지 않게
+      let n = this.botSeq++;
+      while (this.bots.has(`bot-${n}`) || this.remotes.has(`bot-${n}`)) n = this.botSeq++;
       const id = `bot-${n}`;
       const info: PlayerInfo = {
         id, name: botName(n), isBot: true, joinedAt: 0,
@@ -342,7 +357,6 @@ export class Game extends Emitter<GameEvents> {
       changed = true;
     }
     if (changed) {
-      this.session.sendBotInfos([...this.bots.values()].map((b) => b.info));
       this.broadcastMatch();
       this.refreshAllIdentities();
     }
@@ -354,9 +368,11 @@ export class Game extends Emitter<GameEvents> {
     return new BotBrain(h ^ ((this.rnd() * 1e9) | 0), () => this.teamOf(id));
   }
 
+  /** 경기 상태 + 봇 목록 방송. 1Hz 로 반복되므로 순서가 꼬여 놓친 피어(호스트 이전·합류 직후)도 곧 따라잡는다 */
   private broadcastMatch(): void {
     if (!this.matchHost) return;
     this.matchAccum = 0;
+    this.session.sendBotInfos([...this.bots.values()].map((b) => b.info));
     this.session.sendMatch(this.matchHost.snapshot());
   }
 
@@ -394,6 +410,7 @@ export class Game extends Emitter<GameEvents> {
     const color = this.colorOf(info.id);
     const avatar = new Avatar(this.assets, info.name + (info.isBot ? ' 🤖' : ''), color, info.cosmetics.hat, this.nameColor(info.id));
     avatar.root.userData.appliedColor = color;
+    avatar.effects = this.fx;
     this.ctx.scene.add(avatar.root);
     return avatar;
   }
@@ -425,8 +442,9 @@ export class Game extends Emitter<GameEvents> {
   /** 권한 있는 투사체(내 것, 호스트면 봇 것)가 누군가를 맞힘 */
   private onAuthoritativeHit(shooter: PeerId, victim: PeerId, amount: number, source: DamageSource, dir: THREE.Vector3): void {
     if (shooter === this.session.selfId) {
-      this.hud.hitMarker(false);
-      this.sfx.play('hitmark', { pitch: 1 + Math.min(0.4, amount / 100) });
+      this.hud.hitMarker(false, amount);
+      // 연속 명중 음 사다리는 Sfx 가 처리
+      this.sfx.play('hitmark');
     }
     if (victim === this.session.selfId) {
       this.applyLocalHit(amount, shooter, source, dir);
@@ -484,15 +502,22 @@ export class Game extends Emitter<GameEvents> {
   /** 누군가 흠뻑 젖어 쓰러짐(모든 피어에서 같은 처리) */
   private handleSplash(ev: NetSplash): void {
     const pos = _v.set(ev.pos[0], ev.pos[1] + 0.8, ev.pos[2]);
-    this.fx.bigSplash(pos);
+    // 보이는 캐릭터는 쏜 사람 색으로 부풀었다 펑!, 아니면(내가 젖음 등) 그 자리에서 바로 펑
+    const victimAvatar = this.remotes.get(ev.victim)?.avatar ?? this.bots.get(ev.victim)?.avatar;
+    if (victimAvatar?.root.visible) victimAvatar.splashOut(this.colorOf(ev.killer));
+    else this.fx.splashOut(pos, this.colorOf(ev.killer), ev.pos[1]);
     this.sfx.play('splashed', { pos, volume: 0.9 });
     const self = this.session.selfId;
     const killer = ev.killer === ev.victim ? '물웅덩이' : this.nameOf(ev.killer);
-    this.hud.killfeed(killer, this.colorOf(ev.killer), this.nameOf(ev.victim), this.colorOf(ev.victim), ev.source, ev.killer === self || ev.victim === self);
-    if (ev.killer === self && ev.victim !== self) {
+    const bySelf = ev.killer === self && ev.victim !== self;
+    // 킬피드·연속 기록·흠뻑 카드(누가 무엇으로)는 HUD 가 처리
+    this.hud.splash({
+      killer, killerColor: this.colorOf(ev.killer), victim: this.nameOf(ev.victim), victimColor: this.colorOf(ev.victim),
+      source: ev.source, bySelf, onSelf: ev.victim === self,
+    });
+    if (bySelf) {
       this.hud.hitMarker(true);
       this.sfx.play('kill');
-      this.hud.centerMessage(`${this.nameOf(ev.victim)} 흠뻑!`, '', 1.2);
     }
     if (ev.victim === self) {
       this.deathPos.copy(this.body.position);
@@ -624,7 +649,10 @@ export class Game extends Emitter<GameEvents> {
       this.body.step(dt, intent);
       if (this.body.jumped) this.sfx.play('jump', { volume: 0.5 });
       if (this.body.slideStarted) this.sfx.play('land', { volume: 0.6, pitch: 1.4 });
-      if (this.body.landedSpeed > PLAYER.hardLandingSpeed) this.sfx.play('land');
+      // 발소리·착지(젖을수록 철벅) — 간격·세기 판단은 Sfx 가 한다
+      const wet = this.vit.soak / PLAYER.maxSoak;
+      this.sfx.footsteps(dt, this.body.grounded && !this.body.sliding ? Math.hypot(this.body.velocity.x, this.body.velocity.z) : 0, wet, refill.inWater);
+      if (this.body.landedSpeed > 0) this.sfx.landing(this.body.landedSpeed / PLAYER.hardLandingSpeed, wet);
       if (refill.inWater && Math.hypot(this.body.velocity.x, this.body.velocity.z) > 1 && this.rnd() < dt * 8) this.fx.sprinkle(this.body.position);
       this.checkJumpPads(this.body, dt, true);
       if (this.body.position.y < this.map.bounds.killY) this.respawnLocal();
@@ -645,7 +673,7 @@ export class Game extends Emitter<GameEvents> {
       }
       if (this.arsenal.lowWater && !this.lowWaterWarned) {
         this.lowWaterWarned = true;
-        this.sfx.play('dry', { volume: 0.6 });
+        this.sfx.play('lowWater');
       } else if (this.arsenal.tank > 40) {
         this.lowWaterWarned = false;
       }
@@ -676,6 +704,7 @@ export class Game extends Emitter<GameEvents> {
     this.fx.update(dt);
 
     // ---------------- 네트워크
+    this.session.update(now);
     this.netAccum += dt;
     if (this.netAccum >= 1 / NET.stateHz) {
       this.netAccum = 0;
@@ -860,9 +889,13 @@ export class Game extends Emitter<GameEvents> {
       cam.lookAt(_v2.copy(this.deathPos).setY(this.deathPos.y + 0.5));
     }
     const speed = Math.hypot(this.body.velocity.x, this.body.velocity.z);
+    this.viewmodel.setTank(this.arsenal.tank / TANK.capacity);
+    this.viewmodel.reduceMotion = this.opts.profile.settings.reduceMotion;
     this.viewmodel.update(dt, speed, this.body.grounded, this.vit.alive);
     this.ctx.followShadow(this.body.position);
     this.sfx.setListener(cam.position, this.body.yaw);
+    // 많이 젖으면(쓰러진 동안 포함) 소리가 물속처럼 먹먹해진다
+    this.sfx.setSoak(this.vit.alive ? this.vit.soak / PLAYER.maxSoak : 1);
   }
 
   private scoreRows(): ScoreRow[] {
@@ -912,6 +945,7 @@ export class Game extends Emitter<GameEvents> {
       myTeam: this.teamOf(self),
       roomLabel: this.opts.roomLabel,
       playerCount: this.humanCount() + this.bots.size + [...this.remotes.values()].filter((r) => r.info.isBot).length,
+      moveState: this.movementState(this.body),
     }, dt);
     const rows = this.scoreRows();
     const inResults = state?.phase === 'results';
@@ -942,11 +976,14 @@ export class Game extends Emitter<GameEvents> {
         pos: this.body.position.toArray(),
         alive: this.vit.alive,
         soak: this.vit.soak,
+        shielded: this.vit.shielded,
         tank: this.arsenal.tank,
         weapon: this.arsenal.current,
-        remotes: [...this.remotes.values()].map((r) => ({ id: r.info.id, name: r.info.name, bot: r.info.isBot, hasData: r.hasData, pos: r.pos.toArray(), alive: r.alive, soak: r.soak })),
-        bots: [...this.bots.values()].map((b) => ({ id: b.info.id, pos: b.body.position.toArray(), alive: b.vitality.alive, soak: b.vitality.soak })),
+        remotes: [...this.remotes.values()].map((r) => ({ id: r.info.id, name: r.info.name, bot: r.info.isBot, hasData: r.hasData, pos: r.pos.toArray(), alive: r.alive, soak: r.soak, shielded: r.shielded })),
+        bots: [...this.bots.values()].map((b) => ({ id: b.info.id, name: b.info.name, pos: b.body.position.toArray(), alive: b.vitality.alive, soak: b.vitality.soak })),
         match: this.matchHost?.snapshot() ?? this.matchView.state,
+        /** 지금 기준 남은 경기 시간(비호스트는 받은 시각부터 흐른 시간을 뺀 값) */
+        timerMs: this.matchHost ? this.matchHost.snapshot().remainingMs : this.matchView.remainingMs(performance.now()),
         droplets: this.projectiles.activeCount,
       }),
       setIntent: (i) => (this.debugIntent = i),
