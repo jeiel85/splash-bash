@@ -13,13 +13,20 @@
 노드 트리:
   Map                       Empty 루트
     m_<색>                  충돌하는 보이는 정적 메시(머티리얼별 1개로 합침)
-    nocol_d_<색>            충돌 없는 장식(꽃·수건·구름·집 등)
+    nocol_d_<색>            충돌 없는 장식(꽃·수건·풍선 소품 겉모습·집 등)
     water_pool              수영장 수면(Water, 충돌 없음, 채우기 구역)
-    col_helper              보이지 않는 충돌(경계벽 8 m, 파티오 계단 위 경사로) — Invisible
+    col_helper              보이지 않는 충돌 — Invisible: 경계벽(펜스 위 10 m), 파티오 계단 위 경사로,
+                            산울타리 1.7 m 상자, 둥근 소품을 감싼 수직 기둥(pillar), 올라서기 방지 덮개
+                            (anti_perch_cap: 오두막·티키 지붕, 전망대 옆 파티오 격자 윗면)
     spawn_XX / fountain_XX / jumppad_XX / jumptarget_XX / wp_XX / bounds   Empty 마커(extras)
 
---audit: 눈높이(1.35 m) 2 m 격자 점 쌍의 시야선 길이 분포(35 m 초과 목록)와 웨이포인트 간선의
-직선 보행 가능성(바닥 연속·장애물)을 검사해 출력한다(빌드 산출물에는 영향 없음).
+올라서기 규칙: PlayerBody 는 딛고 선 면보다 1.45 m 높은 수직 턱까지 올라서고 1.50 m 부터 못 오른다.
+둥근 풍선·화분 소품은 겉모습을 nocol 로 두고, 주변에서 딛을 수 있는 가장 높은 면 + 1.5 m 이상인 수직 기둥으로
+막는다(옆구리·고리·덤불을 밟고 기어올라 울타리·지붕으로 번지는 길을 없앰).
+
+--audit: 눈높이(1.42 m) 2 m 격자 점 쌍의 시야선 길이 분포(35 m 초과 목록), 팀 스폰 노출(적 전망대 데크·적 파티오
+·스폰끼리), 35 m 초과 시야선을 가장 많이 끊는 차단물 후보 자리, 웨이포인트 간선의 직선 보행 가능성(바닥 연속·
+장애물·점프 턱)을 출력한다(빌드 산출물에는 영향 없음).
 """
 import math
 import os
@@ -64,6 +71,7 @@ C.update({
     "team0_lt": C["peach"], "team1_lt": C["lavender"], "charcoal": C["ink"], "pad_rim": C["coral"],
     "butter": C["lemon"], "tile_out": C["pool_ramp"],
     "fountain_band": "#6FD6E8", "foam": "#F4FFFF",
+    "horizon": "#D4F1FF", "duck_wing": C["thatch"],
 })
 
 
@@ -184,7 +192,7 @@ def pool_floor(x):
     return -0.65 + 0.65 * t * t * (3 - 2 * t)
 
 
-POOL_N = 128
+POOL_N = 96     # 수영장 외곽 샘플 수(0.4 m 간격 — 둥근 코핑·수면·데크 링이 모두 이 점을 공유한다)
 POOL = star_loop(pool_sdf, POOL_N)
 DECK_SDF = rrect_sdf(9.0, 5.5, 2.8)
 
@@ -196,27 +204,21 @@ def build_ground_and_pool():
     angs = [math.atan2(y, x) for x, y in pout]
     deck = [ray_boundary(DECK_SDF, a) for a in angs]
     deck_in = [ray_boundary(rrect_sdf(9.0 - 0.3, 5.5 - 0.3, 2.5), a) for a in angs]
-    outer = []
-    for a in angs:
-        ca, sa = math.cos(a), math.sin(a)
-        t = min(50.0 / max(abs(ca), 1e-9), 44.0 / max(abs(sa), 1e-9))
-        outer.append((t * ca, t * sa))
+    def rect_loop(hx, hz):
+        out = []
+        for a in angs:
+            ca, sa = math.cos(a), math.sin(a)
+            t = min(hx / max(abs(ca), 1e-9), hz / max(abs(sa), 1e-9))
+            out.append((t * ca, t * sa))
+        return out
+    outer = rect_loop(50.0, 44.0)
+    fence_loop = rect_loop(24.4, 18.4)
 
-    # 잔디(동서 방향 줄무늬 3 m, 펜스 밖은 옅은 색)
-    bm = bm_ring(outer, deck, 0.0)
-    bisect_stripes(bm, 1, 3.0, -44, 44, offset=1.5)
-    for c in (-24.4, 24.4):
-        bmesh.ops.bisect_plane(bm, geom=list(bm.verts) + list(bm.edges) + list(bm.faces), dist=1e-5,
-                               plane_co=(c, 0, 0), plane_no=(1, 0, 0))
-    for c in (-18.4, 18.4):
-        bmesh.ops.bisect_plane(bm, geom=list(bm.verts) + list(bm.edges) + list(bm.faces), dist=1e-5,
-                               plane_co=(0, c, 0), plane_no=(0, 1, 0))
-
-    def lawn_mat(c, n):
-        if abs(c.x) > 24.4 or abs(c.y) > 18.4:
-            return C["grass_out"]
-        return C["grass"] if math.floor((c.y + 1.5) / 3.0) % 2 == 0 else C["grass2"]
-    B.add(bm, lawn_mat)
+    # 잔디: 펜스 안은 동서 방향 3 m 두 톤 줄무늬, 펜스 밖은 옅은 한 색(줄무늬로 자르지 않아 삼각형이 적다)
+    bm = bm_ring(fence_loop, deck, 0.0)
+    bisect_stripes(bm, 1, 3.0, -18.4, 18.4, offset=1.5)
+    B.add(bm, lambda c, n: C["grass"] if math.floor((c.y + 1.5) / 3.0) % 2 == 0 else C["grass2"])
+    B.add(bm_ring(outer, fence_loop, 0.0), C["grass_out"])
 
     # 데크(널판 줄무늬) + 테두리
     bm = bm_ring(deck_in, pout, 0.0)
@@ -284,16 +286,39 @@ def slope_mtx(p_top, p_bot, L, thick, lift=0.0, side=0.0):
     return m
 
 
-FLOWER_SEGS = (10, 5)   # 꽃잎 분할(6×3 은 가까이서 팝콘·자갈처럼 보였다)
+FLOWER_SEGS = (10, 5)   # 꽃잎 분할(6×3 은 가까이서 팝콘·자갈처럼 보였다). 송이 수는 절반 이하로 줄였다
 
 
-def flowers(M, pts, colors, kind="nocol", r=0.07):
+def flowers(M, pts, colors, kind="nocol", r=0.07, segs=FLOWER_SEGS):
     for i, p in enumerate(pts):
         x, z, y = p
         col = colors[i % len(colors)]
-        put(bm_ellipsoid(r, r, r * 0.55, FLOWER_SEGS[0], FLOWER_SEGS[1]), col, M, x, z, y, kind=kind)
+        put(bm_ellipsoid(r, r, r * 0.55, segs[0], segs[1]), col, M, x, z, y, kind=kind)
         put(bm_ellipsoid(r * 0.45, r * 0.45, r * 0.3, 4, 2), C["lemon"] if col != C["lemon"] else C["white"], M, x, z,
             y + r * 0.7, kind=kind)
+
+
+def pillar(M, x, z, rx, rz, h, rot=0.0, y=0.0, segs=16, local=None):
+    """보이지 않는 수직 기둥 충돌체(타원 단면, 윗면 평평).
+
+    둥근 풍선·화분 소품은 겉모습 메시를 그대로 충돌시키면 옆구리·고리·덤불을 발판 삼아 위로 기어올라
+    산울타리·지붕으로 건너뛰는 자리가 생긴다. 옆면이 수직인 턱은 PlayerBody 로 재 보면 딛고 선 면보다
+    1.45 m 높이까지 올라서고 1.50 m 부터 못 오른다 → 윗면을 주변에서 딛을 수 있는 가장 높은 면 + 1.5 m 이상으로 둔다.
+    겉모습 메시는 nocol 로 두고 이 기둥만 충돌시킨다.
+    rx = 로컬 X 반지름, rz = 로컬 Y 반지름(rot 으로 함께 돈다).
+    """
+    bm = bm_lathe([(0.0, 0.0), (1.0, 0.0), (1.0, h), (0.0, h)], segs)
+    transform(bm, Matrix.Diagonal((rx, rz, 1.0, 1.0)))
+    put(bm, "Invisible", M, x, z, y, rot, kind="col", local=local)
+
+
+def anti_perch_cap(M, x, z, sx, sz, y0, y1, rot=0.0):
+    """보이지 않는 '올라서기 방지' 덮개(상자, 게임 좌표 x·z 중심, 로컬 X = sx, 로컬 Y = sz, 높이 y0..y1).
+
+    전망대 데크·산울타리처럼 원래 올라갈 수 있는 곳에서 뛰어 닿는 얇은 윗면(가림막 윗살, 초가지붕)은
+    그 위에 서면 스폰·수영장을 내려다보는 자리가 된다. 윗면을 닿지 않는 높이(y1)까지 덮는다.
+    """
+    put(bm_rbox(sx, sz, y1 - y0, r=0.0, segs=0), "Invisible", M, x, z, y0, rot, kind="col")
 
 
 def cooler(M, x, z, rot=0.0, body=None):
@@ -313,10 +338,10 @@ def planter(M, x, z, pot=None, flower=None, y=0.0):
     put(bm_lathe(prof, 14), pot, M, x, z, y)
     for (dx, dz, dy, r, col) in ((0, 0, 0.84, 0.42, C["leaf"]), (0.2, 0.12, 0.98, 0.26, C["leaf2"]),
                                  (-0.18, -0.1, 0.96, 0.27, C["leaf3"])):
-        put(bm_ellipsoid(r, r, r * 0.9, 16, 10), col, M, x + dx, z + dz, y + dy)
+        put(bm_ellipsoid(r, r, r * 0.9, 16 if r > 0.3 else 14, 10 if r > 0.3 else 8), col, M, x + dx, z + dz, y + dy)
     rnd = random.Random(int(abs(x) * 100 + abs(z) * 7))
     pts = []
-    for k in range(7):
+    for k in range(4):
         a = rnd.uniform(0, math.tau)
         el = rnd.uniform(0.2, 1.1)
         pts.append((x + math.cos(a) * math.cos(el) * 0.42, z + math.sin(a) * math.cos(el) * 0.42,
@@ -349,23 +374,23 @@ def hedge(M, x0, x1, z):
     put(bm_rbox(L, 0.8, 1.5, r=0.38, segs=3, bulge=0.05), C["hedge"], M, cx, z, kind="nocol")
     put(bm_rbox(L, 0.8, 1.7, r=0.1, segs=1), "Invisible", M, cx, z, kind="col")
     # 윗면 혹(양 끝에서 0.45 m 안쪽)
-    n = int((L - 0.9) / 0.6) + 1
+    n = int((L - 0.9) / 0.8) + 1
     for i in range(n):
         bx = x0 + 0.45 + (L - 0.9) * i / max(1, n - 1)
-        put(bm_ellipsoid(0.4, 0.44, 0.34, 12, 7), C["hedge_hi"] if i % 2 else C["hedge"], M, bx, z, 1.4, kind="nocol")
+        put(bm_ellipsoid(0.4, 0.44, 0.34, 12, 6), C["hedge_hi"] if i % 2 else C["hedge"], M, bx, z, 1.4, kind="nocol")
     # 옆면 혹(0.5 m 간격, 양쪽 번갈아) — 끝에서 보면 판처럼 보이던 면을 깨 준다
     k = 0
     bx = x0 + 0.5
-    while bx < x1 - 0.45:
+    while bx < x1 - 0.45:   # 0.6 m 간격, 양쪽 번갈아
         side = 1 if k % 2 == 0 else -1
         hy = 0.55 + 0.35 * ((k * 7) % 3) / 2
-        put(bm_ellipsoid(0.32, 0.18, 0.4, 10, 6), C["hedge_hi"] if k % 3 == 1 else C["hedge"], M, bx, z + side * 0.4, hy,
+        put(bm_ellipsoid(0.32, 0.18, 0.4, 10, 5), C["hedge_hi"] if k % 3 == 1 else C["hedge"], M, bx, z + side * 0.4, hy,
             kind="nocol")
-        bx += 0.5
+        bx += 0.6
         k += 1
     rnd = random.Random(int(abs(cx) * 31 + abs(z) * 13))
     pts = []
-    for k in range(5):
+    for k in range(4):
         side = rnd.choice((-1, 1))
         pts.append((x0 + rnd.uniform(0.5, L - 0.5), z + side * 0.44, rnd.uniform(0.4, 1.3)))
     flowers(M, pts, [C["white"], C["pink"], C["lemon"]], r=0.06)
@@ -379,7 +404,7 @@ def fountain(M, x, z):
     """물 보충 분수(랜드마크): 하늘색 타일 수반 + 흰 윗테 + 높은 물기둥·거품, 바닥에 보충 반경 링."""
     R = FOUNTAIN_R
     basin = fillet([(0, 0), (R - 0.1, 0, 0.08), (R - 0.08, 0.58, 0.1), (R, 0.78, 0.06), (R, 0.9, 0.05),
-                    (R - 0.15, 0.9, 0.04), (R - 0.17, 0.72, 0.04), (0, 0.72)], 0.05, 2)
+                    (R - 0.15, 0.9, 0.04), (R - 0.17, 0.72, 0.04), (0, 0.72)], 0.05, 1)
 
     def basin_mat(c, n):
         r = math.hypot(c.x, c.y)
@@ -388,7 +413,7 @@ def fountain(M, x, z):
         if r < R - 0.13 and c.z > 0.6:
             return C["fountain_band"]    # 안쪽 띠
         return C["tile_out"]
-    put(bm_lathe(basin, 32), basin_mat, M, x, z)
+    put(bm_lathe(basin, 28), basin_mat, M, x, z)
     put(bm_cyl(0.17, 0.62, 12, 0.04, r_top=0.12), C["white"], M, x, z, 0.7)
     bowl = fillet([(0, 0), (0.1, 0, 0.03), (0.45, 0.14, 0.05), (0.5, 0.22, 0.03), (0.42, 0.24, 0.02), (0, 0.2)], 0.03, 2)
     put(bm_lathe(bowl, 24), lambda c, n: C["fountain_band"] if (n.z > 0.5 and math.hypot(c.x, c.y) < 0.43) else C["white"],
@@ -400,24 +425,28 @@ def fountain(M, x, z):
         kind="nocol")
     put(bm_cyl(0.12, 0.9, 12, 0.06), "Water", M, x, z, 1.4, kind="nocol")
     put(bm_sphere(0.18, 16, 10), C["foam"], M, x, z, 2.3, kind="nocol")
+    # 가운데 기둥·윗 그릇(1.5 m)을 발판 삼아 오리·고래 위로 건너뛰지 못하게 보이지 않는 기둥으로 감싼다(윗면 2.6 m)
+    pillar(M, x, z, 0.52, 0.52, 1.9, y=0.7)
     # 보충 반경 표시 링(바닥, 충돌 없음)
     w = 0.06
     put(bm_lathe([(REFILL_R + w, 0.0), (REFILL_R + w, 0.03), (REFILL_R - w, 0.03), (REFILL_R - w, 0.0)], 64),
         C["tile_out"], M, x, z, 0.0, kind="nocol")
     rnd = random.Random(int(abs(x) * 17 + abs(z) * 5))
     pts = []
-    for k in range(8):
-        a = math.tau * k / 8 + rnd.uniform(-0.12, 0.12)
+    for k in range(6):
+        a = math.tau * k / 6 + rnd.uniform(-0.12, 0.12)
         rr = rnd.uniform(R + 0.12, R + 0.24)
         pts.append((x + math.cos(a) * rr, z + math.sin(a) * rr, 0.08))
     flowers(M, pts, [C["pink"], C["lemon"], C["white"], C["coral"]], r=0.08)
 
 
 def laundry(M, x0, x1, z):
+    """빨랫줄(전부 장식, 충돌 없음). 수건은 시야만 가리고 물·사람은 통과한다.
+    기둥 꼭대기(2.4 m)도 고래·산울타리를 잇는 징검다리가 돼서 가는 기둥까지 nocol 로 뒀다."""
     for px in (x0, x1):
-        put(bm_cyl(0.07, 2.4, 10, 0.03), C["white"], M, px, z)
-        put(bm_rbox(0.09, 0.8, 0.09, r=0.035, segs=1), C["white"], M, px, z, 2.28)
-        put(bm_sphere(0.09, 8, 5), C["coral"], M, px, z, 2.46)
+        put(bm_cyl(0.07, 2.4, 10, 0.03), C["white"], M, px, z, kind="nocol")
+        put(bm_rbox(0.09, 0.8, 0.09, r=0.035, segs=1), C["white"], M, px, z, 2.28, kind="nocol")
+        put(bm_sphere(0.09, 8, 5), C["coral"], M, px, z, 2.46, kind="nocol")
     towels = [(C["coral"], C["white"]), (C["aqua"], C["lemon"]), (C["mint"], C["white"]), (C["pink"], C["lemon"])]
     n = len(towels)
     span = x1 - x0
@@ -437,12 +466,15 @@ def laundry(M, x0, x1, z):
 
 
 def towel_rack(M, x, z):
+    """수건 거치대. 가로대를 사다리처럼 밟고 1.4 m 위로 올라 빨랫줄 T자 받침 → 산울타리로 건너뛰는 길이 있어서
+    겉모습은 nocol, 충돌은 거치대 전체를 감싼 보이지 않는 상자(윗면 1.55 m, 지면 점프로 닿지 않음) — 엄폐물로 읽힌다."""
     for sx in (-0.75, 0.75):
-        put(bm_rbox(0.09, 0.09, 1.3, r=0.03, segs=1), C["wood"], M, x + sx, z)
-        put(bm_rbox(0.12, 0.7, 0.08, r=0.03, segs=1), C["wood"], M, x + sx, z)
-        put(bm_sphere(0.07, 8, 5), C["wood_dark"], M, x + sx, z, 1.32)
+        put(bm_rbox(0.09, 0.09, 1.3, r=0.03, segs=1), C["wood"], M, x + sx, z, kind="nocol")
+        put(bm_rbox(0.12, 0.7, 0.08, r=0.03, segs=1), C["wood"], M, x + sx, z, kind="nocol")
+        put(bm_sphere(0.07, 8, 5), C["wood_dark"], M, x + sx, z, 1.32, kind="nocol")
     for hy in (1.25, 0.75):
-        put(bm_tube([G(x - 0.75, z, hy), G(x + 0.75, z, hy)], 0.035, 8), C["wood_dark"], M, 0, 0)
+        put(bm_tube([G(x - 0.75, z, hy), G(x + 0.75, z, hy)], 0.035, 8), C["wood_dark"], M, 0, 0, kind="nocol")
+    put(bm_rbox(1.62, 0.3, 1.55, r=0.0, segs=0), "Invisible", M, x, z, kind="col")
     for (dz, col, col2) in ((-0.07, C["aqua"], C["white"]), (0.07, C["peach"], C["white"])):
         bm = bm_rbox(1.3, 0.035, 0.85, r=0.015, segs=1)
         bisect_stripes(bm, 0, 0.2, -0.65, 0.65)
@@ -464,8 +496,8 @@ def jump_pad(M, x, z, tx, tz):
         if r > 0.9:
             return C["pad_rim"] if math.floor(math.atan2(c.y, c.x) / (math.tau / 12)) % 2 == 0 else C["white"]
         return C["pad_mat"]
-    put(bm_lathe(prof, 36), mat, M, x, z)
-    put(bm_torus(0.62, 0.035, 36, 6, 0, 180, close=False), C["white"], M, x, z, PAD_TOP - 0.012, kind="nocol")
+    put(bm_lathe(prof, 30), mat, M, x, z)
+    put(bm_torus(0.62, 0.035, 30, 6, 0, 180, close=False), C["white"], M, x, z, PAD_TOP - 0.012, kind="nocol")
     put(bm_lathe([(0, 0), (0.34, 0), (0.34, 0.012), (0, 0.012)], 24), C["white"], M, x, z, PAD_TOP, kind="nocol")
     # 셰브론(로컬 +X 를 가리키는 V) — 목표 방향으로 돌린다(Blender XY = (게임 x, -게임 z))
     ang = math.degrees(math.atan2(-(tz - z), tx - x))
@@ -475,8 +507,9 @@ def jump_pad(M, x, z, tx, tz):
         bm = bm_prism(chev, 0.0, 0.01)
         transform(bm, Matrix.Translation((off, 0, 0)))
         put(bm, C["pad_mat"], M, x, z, PAD_TOP + 0.012, rot=ang, kind="nocol")
+    dash = fillet_closed([(-0.05, -0.15), (0.05, -0.15), (0.05, 0.15), (-0.05, 0.15)], 0.045, 1)
     for k in range(14):
-        bm = bm_rbox(0.1, 0.3, 0.02, r=0.03, segs=1)
+        bm = bm_prism(dash, 0.0, 0.02)
         transform(bm, Matrix.Translation((1.47, 0, 0)))
         transform(bm, rot_z(360 * k / 14))
         put(bm, C["pad_mat"], M, x, z, 0.0, kind="nocol")
@@ -502,16 +535,17 @@ def umbrella_table(M, x, z, y, team):
     put(bm_cyl(0.66, 0.06, 24, 0.03), C["white"], M, x, z, y + 0.72)
     put(bm_cyl(0.035, 1.9, 8, 0.01), C["white"], M, x, z, y + 0.78)
     canopy = bm_lathe([(0.0, 2.34), (1.5, 2.16), (1.52, 2.22), (0.0, 2.7)], 16, phase=math.pi / 16)
+    # 캐노피는 장식(충돌 없음): 충돌시키면 BBQ 뚜껑에서 뛰어 캐노피 위(3.8 m)로 올라가 맵 전체를 내려다봤다
     put(canopy, lambda c, n: tcol if math.floor((math.atan2(c.y, c.x) + math.tau) / (math.tau / 8)) % 2 == 0 else C["white"],
-        M, x, z, y)
-    put(bm_sphere(0.07, 8, 5), tcol, M, x, z, y + 2.74)
+        M, x, z, y, kind="nocol")
+    put(bm_sphere(0.07, 8, 5), tcol, M, x, z, y + 2.74, kind="nocol")
     for sz in (-1, 1):
         cx, cz = x - 0.35, z + sz * 0.95
         rot = math.degrees(math.atan2(x - cx, z - cz))  # 의자 정면(로컬 -Y)이 테이블을 본다
         put(bm_cyl(0.2, 0.04, 12, 0.02), C["white"], M, cx, cz, y)
         put(bm_cyl(0.04, 0.4, 8, 0.01), C["white"], M, cx, cz, y)
-        put(bm_rbox(0.46, 0.46, 0.1, r=0.04, segs=2), tlt, M, cx, cz, y + 0.4, rot)
-        put(bm_rbox(0.46, 0.09, 0.42, r=0.04, segs=2), tlt, M, cx, cz, y + 0.46, rot, local=tr(0, 0.2, 0))
+        put(bm_rbox(0.46, 0.46, 0.1, r=0.04, segs=1), tlt, M, cx, cz, y + 0.4, rot)
+        put(bm_rbox(0.46, 0.09, 0.42, r=0.04, segs=1), tlt, M, cx, cz, y + 0.46, rot, local=tr(0, 0.2, 0))
 
 
 def lattice(M, cx, cz, L, y, rot=0.0, style="lattice"):
@@ -550,76 +584,71 @@ def lattice(M, cx, cz, L, y, rot=0.0, style="lattice"):
                     B.add(bm_tube([(xo, a, sgn * a + c), (xo, b, sgn * b + c)], 0.022, 4, caps=False), C["white"], m,
                           kind="nocol")
                 c += 0.45
-    for k in range(int(L * 4.4)):
+    for k in range(int(L * 1.6)):   # 덩굴 꽃: 송이 수를 줄이고 분할을 올렸다(5×3 은 팝콘처럼 보였다)
         side = rnd.choice((-1, 1))
         col = (C["pink"], C["white"], C["rose"])[k % 3]
-        B.add(bm_ellipsoid(0.07, 0.07, 0.056, 5, 3), col, m @ tr(side * 0.08, rnd.uniform(-L / 2 + 0.2, L / 2 - 0.2),
+        B.add(bm_ellipsoid(0.08, 0.08, 0.064, 8, 4), col, m @ tr(side * 0.08, rnd.uniform(-L / 2 + 0.2, L / 2 - 0.2),
                                                                  rnd.uniform(0.25, 1.9)), kind="nocol")
-    for k in range(int(L * 2)):
+    for k in range(int(L * 1.5)):
         side = rnd.choice((-1, 1))
         B.add(bm_ellipsoid(0.12, 0.22, 0.16, 8, 5), C["leaf"], m @ tr(side * 0.07, rnd.uniform(-L / 2 + 0.3, L / 2 - 0.3),
                                                                       rnd.uniform(1.6, 1.95)), kind="nocol")
 
 
 def float_stack(M, x, z):
-    """수영장 튜브를 쌓아 둔 더미(키 ≈ 2.1 m) — 데크 모서리 시야 차단 엄폐."""
-    put(bm_cyl(0.32, 1.7, 12, 0.05), C["white"], M, x, z)
-    cols = [C["sun"], C["pink"], C["aqua"], C["mint"]]
+    """수영장 튜브를 쌓아 둔 더미(키 ≈ 2.25 m) — 데크 모서리 시야 차단 엄폐.
+
+    고리가 계단처럼 층층이 있어 겉모습을 그대로 충돌시키면 꼭대기(2.25 m)까지 올라가 울타리로 건너뛴다
+    → 겉모습은 nocol, 충돌은 보이지 않는 기둥 하나.
+    """
+    put(bm_cyl(0.32, 1.7, 12, 0.05), C["white"], M, x, z, kind="nocol")
+    cols = [C["butter"], C["pink"], C["aqua"], C["mint"]]
     for k, col in enumerate(cols):
-        ring = bm_torus(0.5, 0.21, 20, 8)
+        ring = bm_torus(0.5, 0.21, 22, 9)
         transform(ring, rot_x(6 if k % 2 else -5))
-        put(ring, col, M, x + (0.04 if k % 2 else -0.03), z, 0.22 + 0.42 * k, 20 * k)
-    put(bm_sphere(0.3, 14, 8), lambda c, n: [C["coral"], C["white"], C["sun"], C["white"]][
-        int(((math.atan2(c.y, c.x) + math.tau) % math.tau) / (math.tau / 4)) % 4], M, x, z, 1.95)
+        put(ring, col, M, x + (0.04 if k % 2 else -0.03), z, 0.22 + 0.42 * k, 20 * k, kind="nocol")
+    put(bm_sphere(0.3, 16, 10), lambda c, n: [C["coral"], C["white"], C["butter"], C["white"]][
+        int(((math.atan2(c.y, c.x) + math.tau) % math.tau) / (math.tau / 4)) % 4], M, x, z, 1.95, kind="nocol")
+    pillar(M, x, z, 0.7, 0.7, 2.25)
 
 
 def rubber_duck(M, x, z, rot=0.0):
-    """잔디 위 대형 고무오리 튜브(키 ≈ 2.1 m, 충돌). 로컬 -Y 가 정면."""
+    """잔디 위 대형 고무오리 튜브(키 ≈ 2.05 m). 로컬 -Y 가 정면. 충돌은 보이지 않는 타원 기둥(올라서지 못함)."""
     yel, beak = C["lemon"], C["coral"]
-    put(bm_ellipsoid(0.85, 1.05, 0.62, 18, 10), yel, M, x, z, 0.62, rot)
-    put(bm_ellipsoid(0.3, 0.3, 0.26, 10, 6), yel, M, x, z, 1.02, rot, local=tr(0, 0.95, 0))
-    put(bm_sphere(0.5, 16, 9), yel, M, x, z, 1.55, rot, local=tr(0, -0.55, 0))
-    put(bm_ellipsoid(0.26, 0.24, 0.1, 10, 5), beak, M, x, z, 1.44, rot, local=tr(0, -1.02, 0))
+    put(bm_ellipsoid(0.85, 1.05, 0.62, 18, 10), yel, M, x, z, 0.62, rot, kind="nocol")
+    put(bm_ellipsoid(0.3, 0.3, 0.26, 10, 6), yel, M, x, z, 1.02, rot, kind="nocol", local=tr(0, 0.95, 0))
+    put(bm_sphere(0.5, 16, 9), yel, M, x, z, 1.55, rot, kind="nocol", local=tr(0, -0.55, 0))
+    put(bm_ellipsoid(0.26, 0.24, 0.1, 10, 5), beak, M, x, z, 1.44, rot, kind="nocol", local=tr(0, -1.02, 0))
+    pillar(M, x, z, 0.8, 1.0, 2.45, rot)
     for sx in (-1, 1):
         put(bm_sphere(0.07, 8, 5), C["ink"], M, x, z, 1.7, rot, kind="nocol", local=tr(sx * 0.2, -0.98, 0))
         put(bm_sphere(0.025, 5, 3), C["white"], M, x, z, 1.73, rot, kind="nocol", local=tr(sx * 0.2 + 0.02, -1.04, 0))
         put(bm_ellipsoid(0.12, 0.08, 0.05, 8, 4), C["pink"], M, x, z, 1.52, rot, kind="nocol", local=tr(sx * 0.33, -0.9, 0))
         wing = bm_ellipsoid(0.14, 0.5, 0.3, 10, 6)
-        put(wing, C["sun"], M, x, z, 0.75, rot, local=tr(sx * 0.8, 0.1, 0))
+        put(wing, C["duck_wing"], M, x, z, 0.75, rot, kind="nocol", local=tr(sx * 0.8, 0.1, 0))
 
 
 def whale(M, x, z, rot=0.0):
-    """풍선 고래(키 ≈ 2.0 m, 충돌). 로컬 -Y 가 머리."""
+    """풍선 고래(키 ≈ 2.0 m). 로컬 -Y 가 머리.
+
+    둥근 옆구리(1.3 m 이상)는 지면 점프로 올라설 수 있어 산울타리 옆에서 발판이 됐다
+    → 겉모습은 nocol, 충돌은 보이지 않는 타원 기둥(윗면 2.4 m: 쿨러 뚜껑 0.86 m 에서도 닿지 않음).
+    """
     body, belly = C["aqua"], C["white"]
-    put(bm_ellipsoid(0.9, 1.3, 0.8, 18, 10), body, M, x, z, 0.8, rot)
-    put(bm_ellipsoid(0.72, 0.9, 0.45, 14, 7), belly, M, x, z, 0.5, rot, local=tr(0, -0.25, 0))
+    put(bm_ellipsoid(0.9, 1.3, 0.8, 18, 10), body, M, x, z, 0.8, rot, kind="nocol")
+    put(bm_ellipsoid(0.72, 0.9, 0.45, 14, 7), belly, M, x, z, 0.5, rot, kind="nocol", local=tr(0, -0.25, 0))
     tail = bm_ellipsoid(0.22, 0.5, 0.18, 10, 6)
     transform(tail, rot_x(-50))
-    put(tail, body, M, x, z, 1.35, rot, local=tr(0, 1.3, 0))
+    put(tail, body, M, x, z, 1.35, rot, kind="nocol", local=tr(0, 1.3, 0))
+    pillar(M, x, z, 0.82, 1.22, 2.4, rot)
     for sx in (-1, 1):
         fl = bm_ellipsoid(0.45, 0.2, 0.1, 10, 5)
         transform(fl, rot_y(sx * 35))
-        put(fl, body, M, x, z, 1.55, rot, local=tr(sx * 0.35, 1.52, 0))
+        put(fl, body, M, x, z, 1.55, rot, kind="nocol", local=tr(sx * 0.35, 1.52, 0))
         put(bm_sphere(0.07, 8, 5), C["ink"], M, x, z, 1.0, rot, kind="nocol", local=tr(sx * 0.55, -0.9, 0))
         put(bm_ellipsoid(0.12, 0.05, 0.08, 8, 4), C["pink"], M, x, z, 0.85, rot, kind="nocol", local=tr(sx * 0.62, -0.95, 0))
     for k, (dx, dy, r) in enumerate(((0.0, 1.72, 0.1), (0.12, 1.9, 0.08), (-0.12, 1.92, 0.08), (0.0, 2.05, 0.07))):
         put(bm_sphere(r, 8, 5), "Water", M, x, z, dy, rot, kind="nocol", local=tr(dx, -0.4, 0))
-
-
-def banana_plant(M, x, z, y=0.0):
-    """큰 화분 바나나 나무(키 ≈ 2.4 m). 가운데 둥근 덤불은 충돌, 둥근 주걱 잎은 장식."""
-    prof = fillet([(0, 0), (0.42, 0, 0.06), (0.55, 0.62, 0.06), (0.6, 0.66, 0.03), (0.6, 0.74, 0.03), (0.5, 0.74), (0, 0.74)],
-                  0.04, 1)
-    put(bm_lathe(prof, 16), C["white"], M, x, z, y)
-    put(bm_ellipsoid(0.46, 0.46, 0.52, 12, 7), C["leaf3"], M, x, z, y + 1.15)
-    put(bm_ellipsoid(0.34, 0.34, 0.4, 10, 6), C["leaf"], M, x + 0.12, z - 0.08, y + 1.62)
-    rnd = random.Random(int(abs(x) * 13 + abs(z) * 3))
-    for k in range(7):
-        a = math.tau * k / 7 + rnd.uniform(-0.2, 0.2)
-        leaf = bm_ellipsoid(0.5, 0.3, 0.05, 12, 5)
-        transform(leaf, Matrix.Translation((0.52, 0, 0)) @ rot_y(-rnd.uniform(15, 35)))
-        transform(leaf, rot_z(math.degrees(a)))
-        put(leaf, C["leaf"] if k % 2 else C["leaf2"], M, x, z, y + rnd.uniform(1.55, 2.05), kind="nocol")
 
 
 def leaning_raft(M, x, z, rot=0.0):
@@ -635,12 +664,12 @@ def leaning_raft(M, x, z, rot=0.0):
 
 def shrub(M, x, z, r=1.2):
     """큰 둥근 관목(충돌, 키 ≈ 2.3 m)."""
-    put(bm_ellipsoid(r, r, r * 0.85, 14, 8), C["leaf3"], M, x, z, r * 0.8)
-    put(bm_ellipsoid(r * 0.62, r * 0.62, r * 0.55, 10, 6), C["leaf"], M, x + r * 0.45, z - r * 0.3, r * 1.45)
-    put(bm_ellipsoid(r * 0.55, r * 0.55, r * 0.5, 10, 6), C["leaf2"], M, x - r * 0.5, z + r * 0.2, r * 1.3)
+    put(bm_ellipsoid(r, r, r * 0.85, 20, 12), C["leaf3"], M, x, z, r * 0.8)
+    put(bm_ellipsoid(r * 0.62, r * 0.62, r * 0.55, 16, 9), C["leaf"], M, x + r * 0.45, z - r * 0.3, r * 1.45)
+    put(bm_ellipsoid(r * 0.55, r * 0.55, r * 0.5, 16, 9), C["leaf2"], M, x - r * 0.5, z + r * 0.2, r * 1.3)
     rnd = random.Random(int(abs(x) * 5 + abs(z) * 9))
     pts = []
-    for k in range(12):
+    for k in range(5):
         a, e = rnd.uniform(0, math.tau), rnd.uniform(-0.3, 0.9)
         pts.append((x + math.cos(a) * math.cos(e) * r, z + math.sin(a) * math.cos(e) * r, r * 0.8 + math.sin(e) * r * 0.85))
     flowers(M, pts, [C["white"], C["pink"], C["sun"]], r=0.09)
@@ -650,14 +679,16 @@ def topiary(M, x, z):
     """화분에 심은 동글동글 토피어리(키 ≈ 2.6 m) — 대각선 긴 시야를 끊는 엄폐."""
     prof = fillet([(0, 0), (0.5, 0, 0.06), (0.62, 0.55, 0.06), (0.68, 0.6, 0.03), (0.68, 0.7, 0.03), (0.56, 0.7), (0, 0.7)],
                   0.04, 1)
-    put(bm_lathe(prof, 16), C["white"], M, x, z)
-    put(bm_cyl(0.1, 0.5, 8, 0.0), C["trunk"], M, x, z, 0.65)
-    put(bm_ellipsoid(0.82, 0.82, 0.74, 14, 8), C["hedge"], M, x, z, 1.4)
-    put(bm_ellipsoid(0.56, 0.56, 0.5, 12, 7), C["hedge_hi"], M, x, z, 2.35)
-    put(bm_sphere(0.24, 10, 6), C["hedge"], M, x, z, 2.95)
+    put(bm_lathe(prof, 16), C["white"], M, x, z, kind="nocol")
+    put(bm_cyl(0.1, 0.5, 8, 0.0), C["trunk"], M, x, z, 0.65, kind="nocol")
+    put(bm_ellipsoid(0.82, 0.82, 0.74, 20, 12), C["hedge"], M, x, z, 1.4, kind="nocol")
+    put(bm_ellipsoid(0.56, 0.56, 0.5, 16, 9), C["hedge_hi"], M, x, z, 2.35, kind="nocol")
+    put(bm_sphere(0.24, 14, 8), C["hedge"], M, x, z, 2.95, kind="nocol")
+    # 동글동글 층을 밟고 3 m 꼭대기까지 오르지 못하게 충돌은 수직 기둥 하나
+    pillar(M, x, z, 0.7, 0.7, 3.0)
     rnd = random.Random(int(abs(x) * 7 + abs(z) * 3))
     pts = []
-    for k in range(10):
+    for k in range(4):
         a, e = rnd.uniform(0, math.tau), rnd.uniform(-0.6, 0.9)
         pts.append((x + math.cos(a) * math.cos(e) * 0.83, z + math.sin(a) * math.cos(e) * 0.83, 1.4 + math.sin(e) * 0.74))
     flowers(M, pts, [C["pink"], C["white"]], r=0.08)
@@ -703,13 +734,17 @@ def outdoor_rug(M, x, z, y, team):
 
 def patio_props(M, team):
     y = 1.0
-    # BBQ 는 파티오 뒤(펜스 쪽)에 둔다 — 안쪽 가장자리에 두면 뚜껑 위에 올라서서 가림막 너머를 내려다본다
-    bbq(M, -23.55, -3.9, y, rot=90)
+    # BBQ 는 파티오 뒤(펜스 쪽)에 둔다 — 안쪽 가장자리에 두면 뚜껑 위에 올라서서 가림막 너머를 내려다본다.
+    # 파라솔에서도 3 m 이상 떨어뜨린다(뚜껑 2.0 m 에서 캐노피·가림막에 닿지 않게)
+    bbq(M, -23.55, -5.6, y, rot=90)
     umbrella_table(M, -22.9, 0.0, y, team)
     # 안쪽 가장자리 가림막: 북쪽 격자 z∈[3, 8] + 남쪽 격자 z∈[-7.5, -1] → 가운데 4 m 출구만 열린다
     # (파티오↔파티오·적 전망대↔스폰 시야를 끊는다, design-synthesis §10)
     lattice(M, -18.4, 5.5, 5.0, y)
     lattice(M, -18.4, -4.25, 6.5, y)
+    # 북쪽 격자는 자기 전망대 데크(3.6 m)에서 3 m 거리라 윗살(2.8 m)에 뛰어내려 스폰을 내려다볼 수 있었다
+    # → 데크·난간에서 닿지 않는 6.0 m 까지 윗면을 덮는다(격자 위 좁은 띠라 사선 사격 영향은 작다)
+    anti_perch_cap(M, -18.4, 5.5, 0.3, 5.0, y + 1.8, 6.0)
     tkey = "team0" if team == 0 else "team1"
     planter(M, -23.55, 7.3, y=y, flower=C[tkey])
     planter(M, -23.55, -7.3, y=y, flower=C[tkey])
@@ -761,7 +796,7 @@ def cabana(M, x, z):
         M, x, z, 2.2)
     for k in range(9):
         zz = z - 2.0 + 4.0 * k / 8
-        put(bm_ellipsoid(0.07, 0.24, 0.2, 8, 5), C["coral"] if k % 2 == 0 else C["white"], M, x + 1.74, zz, 2.22, kind="nocol")
+        put(bm_ellipsoid(0.07, 0.24, 0.2, 8, 4), C["coral"] if k % 2 == 0 else C["white"], M, x + 1.74, zz, 2.22, kind="nocol")
     put(bm_sphere(0.14, 10, 6), C["lemon"], M, x, z, 2.68)
     put(bm_rbox(0.95, 3.0, 0.36, r=0.1, segs=2), C["white"], M, x - 0.86, z, 0.08)
     put(bm_rbox(0.9, 2.9, 0.13, r=0.06, segs=2), C["mint"], M, x - 0.86, z, 0.44)
@@ -773,9 +808,9 @@ def tiki_bar(M, x, z):
     """4 × 2 m 티키 바(북쪽 판: 카운터가 수영장(남쪽 = 로컬 +Y) 쪽)."""
     put(bm_rbox(4.0, 0.75, 1.03, r=0.08, segs=2), C["wood_dark"], M, x, z, 0.0, local=tr(0, 0.62, 0))
     put(bm_rbox(4.3, 0.98, 0.09, r=0.04, segs=2), C["wood"], M, x, z, 1.02, local=tr(0, 0.62, 0))
-    for k in range(27):
-        bx = -1.95 + 3.9 * k / 26
-        put(bm_cyl(0.07, 1.0, 6, 0.0), C["bamboo"] if k % 3 else C["thatch2"], M, x, z, 0.0, kind="nocol",
+    for k in range(21):
+        bx = -1.95 + 3.9 * k / 20
+        put(bm_cyl(0.09, 1.0, 6, 0.0), C["bamboo"] if k % 3 else C["thatch2"], M, x, z, 0.0, kind="nocol",
             local=tr(bx, 1.0, 0))
     # 뒷벽(바깥쪽, 지붕까지 막힘) + 선반 + 병 + 메뉴판
     bm = bm_rbox(4.0, 0.22, 2.25, r=0.06, segs=2)
@@ -800,6 +835,9 @@ def tiki_bar(M, x, z):
     fringe = bm_torus(1.0, 0.06, 32, 6)
     transform(fringe, Matrix.Diagonal((2.55, 1.6, 1.0, 1.0)))
     put(fringe, C["thatch2"], M, x, z, 2.22, kind="nocol")
+    # 초가지붕 위(2.3~2.9 m)는 산울타리 위에서 뛰어 닿아 수영장 한가운데를 내려다보는 자리였다
+    # → 지붕 윤곽을 따라 산울타리(1.7 m)에서 닿지 않는 3.4 m 까지 채운다(보이는 지붕 꼭대기보다 0.5 m 위까지만)
+    pillar(M, x, z, 2.62, 1.66, 1.2, y=2.2, segs=20)
     for k, col in enumerate((C["pink"], C["lemon"], C["mint"])):
         put(bm_sphere(0.16, 8, 5), col, M, x, z, 1.95, kind="nocol", local=tr(-1.2 + 1.2 * k, 1.35, 0))
     for sx in (-1, 1):
@@ -807,27 +845,35 @@ def tiki_bar(M, x, z):
         put(bm_ellipsoid(0.1, 0.1, 0.16, 8, 5), C["sun"], M, x, z, 1.65, kind="nocol", local=tr(sx * 2.35, 1.2, 0))
 
 
-def flamingo(x, z, rot):
-    """수영장 한가운데 떠 있는 홍학 튜브(정적, 충돌). 로컬 +X 가 머리 쪽."""
-    M = I4
-    put(bm_ellipsoid(0.95, 0.62, 0.42, 20, 10), C["pink"], M, x, z, 0.08, rot)
+def flamingo(M, x, z, rot, swan=False):
+    """수영장에 떠 있는 홍학(팀 0 쪽)/백조(팀 1 쪽) 튜브(정적, 충돌). 로컬 +X 가 머리 쪽.
+
+    두 마리가 같은 형태로 원점 대칭 자리(±2.2, ±0.9)에 떠 있어 수영장 한가운데(봇 물 보충 목표 = 수면 중심)는
+    비어 있다. 색만 다르다.
+    """
+    body, wing, beak = (C["white"], C["lavender"], C["coral"]) if swan else (C["pink"], C["rose"], C["lemon"])
+    put(bm_ellipsoid(0.95, 0.62, 0.42, 20, 10), body, M, x, z, 0.08, rot)
     for sy in (-1, 1):
-        put(bm_ellipsoid(0.55, 0.14, 0.2, 12, 6), C["rose"], M, x, z, 0.22, rot, local=tr(-0.1, sy * 0.52, 0))
+        put(bm_ellipsoid(0.55, 0.14, 0.2, 12, 6), wing, M, x, z, 0.22, rot, kind="nocol", local=tr(-0.1, sy * 0.52, 0))
+    # 목·머리는 장식이고 가는 보이지 않는 기둥(윗면 2.15 m)이 대신 막는다: 목을 타고 머리(1.95 m)에 올라
+    # 티키 바 지붕으로 건너뛰는 길이 있었다
     neck = [(0.55, 0, 0.3), (0.78, 0, 0.72), (0.62, 0, 1.12), (0.5, 0, 1.45), (0.62, 0, 1.72)]
-    put(bm_tube(neck, 0.13, 10, radii=[0.17, 0.13, 0.12, 0.11, 0.11]), C["pink"], M, x, z, 0.0, rot)
-    put(bm_ellipsoid(0.22, 0.17, 0.18, 12, 7), C["pink"], M, x, z, 1.8, rot, local=tr(0.68, 0, 0))
-    put(bm_tube([(0.85, 0, 1.8), (1.0, 0, 1.74), (1.1, 0, 1.64)], 0.06, 8, radii=[0.08, 0.06, 0.04]), C["lemon"], M, x, z, 0, rot)
+    put(bm_tube(neck, 0.13, 10, radii=[0.17, 0.13, 0.12, 0.11, 0.11]), body, M, x, z, 0.0, rot, kind="nocol")
+    put(bm_ellipsoid(0.22, 0.17, 0.18, 12, 7), body, M, x, z, 1.8, rot, kind="nocol", local=tr(0.68, 0, 0))
+    put(bm_tube([(0.85, 0, 1.8), (1.0, 0, 1.74), (1.1, 0, 1.64)], 0.06, 8, radii=[0.08, 0.06, 0.04]), beak, M, x, z, 0, rot,
+        kind="nocol")
+    pillar(M, x, z, 0.3, 0.26, 1.85, rot, y=0.3, segs=12, local=tr(0.68, 0, 0))
     put(bm_sphere(0.045, 8, 5), C["ink"], M, x, z, 1.63, rot, local=tr(1.11, 0, 0))
     for sy in (-1, 1):
         put(bm_sphere(0.04, 8, 5), C["ink"], M, x, z, 1.86, rot, kind="nocol", local=tr(0.78, sy * 0.13, 0))
     tail = bm_ellipsoid(0.26, 0.16, 0.12, 10, 6)
     transform(tail, rot_y(-40))
-    put(tail, C["rose"], M, x, z, 0.46, rot, local=tr(-0.88, 0, 0))
+    put(tail, wing, M, x, z, 0.46, rot, kind="nocol", local=tr(-0.88, 0, 0))
 
 
 def donut(x, z, icing):
-    put(bm_torus(0.5, 0.2, 24, 10), C["lemon"], I4, x, z, -0.02, kind="nocol")
-    put(bm_torus(0.5, 0.215, 24, 6, 20, 160, close=False), icing, I4, x, z, -0.02, kind="nocol")
+    put(bm_torus(0.5, 0.2, 20, 8), C["lemon"], I4, x, z, -0.02, kind="nocol")
+    put(bm_torus(0.5, 0.215, 20, 5, 20, 160, close=False), icing, I4, x, z, -0.02, kind="nocol")
     rnd = random.Random(int(abs(x) * 10 + abs(z)))
     cols = [C["white"], C["aqua"], C["mint"], C["sun"]]
     for k in range(14):
@@ -839,7 +885,7 @@ def donut(x, z, icing):
 
 
 def beach_ball(x, z, y=0.12, r=0.32):
-    cols = [C["coral"], C["white"], C["sun"], C["white"], C["aqua"], C["white"]]
+    cols = [C["coral"], C["white"], C["lemon"], C["white"], C["aqua"], C["white"]]
     put(bm_sphere(r, 18, 10), lambda c, n: cols[int(((math.atan2(c.y, c.x) + math.tau) % math.tau) / (math.tau / 6)) % 6],
         I4, x, z, y, kind="nocol")
 
@@ -853,6 +899,10 @@ RAMP_RUN = TOWER_TOP / math.tan(math.radians(32))   # 32° 경사 → 수평 5.7
 RAMP_X1 = RAMP_X0 + RAMP_RUN        # 경사로 아랫끝
 CRATE_Z0, CRATE_Z1 = 11.0, 13.0     # 상자 계단 z 범위(서쪽)
 TRUNK_X, TRUNK_Z = -17.3, 15.3
+# 점프대 J1 착지 목표(게임 x, z). 데크 한가운데(-14, 12)보다 북서쪽 깊숙이: 비행 중 어떤 방향키를 누르고 있어도
+# (공중 조작으로 수평 속도가 줄어 2.45 m 짧게 떨어진다) 데크 앞 난간에 걸리지 않고 데크에 내린다
+# (입력 없음·앞·뒤·좌·우·앞±20°·앞±45° 9가지 모두 데크 착지를 PlayerBody 로 확인). J2 는 원점 대칭.
+JUMP_TARGET = (-15.4, 13.1)
 
 
 def hut_face_decor(M, cx, cz, y0, style):
@@ -989,7 +1039,7 @@ def tower(M, style):
             if play:
                 put(bm, cols[ci % len(cols)], M, bx, zc, lv * 0.9 + 0.01)
                 for sx in (-1, 1):
-                    d = bm_cyl(0.3, 0.02, 16, 0.0)
+                    d = bm_cyl(0.3, 0.02, 12, 0.0)
                     transform(d, rot_y(90 * sx))
                     put(d, C["white"], M, bx + sx * 0.49, zc, lv * 0.9 + 0.45, kind="nocol")
             else:
@@ -1017,7 +1067,7 @@ def tower(M, style):
     flag = fillet_closed([(0.0, 0.0), (0.7, -0.22), (0.0, -0.44)], 0.04, 1)
     fb = bm_prism(flag, -0.015, 0.015)
     transform(fb, rot_x(90))
-    put(fb, C["sun"] if not play else C["coral"], M, hx + 1.6, hz, y0 + 4.38, kind="nocol")
+    put(fb, C["lemon"] if not play else C["coral"], M, hx + 1.6, hz, y0 + 4.38, kind="nocol")
     for px in (hx - 1.6, hx + 1.6):
         put(bm_cyl(0.13, y0 + 0.05, 10, 0.03), pcols[1], M, px, hz + 0.75)
 
@@ -1036,7 +1086,7 @@ def tower(M, style):
             put(bm_ellipsoid(r, r, r * 0.86, 16, 9), col, M, x, z, y)
         rnd = random.Random(5)
         pts = []
-        for k in range(18):
+        for k in range(7):
             a, e = rnd.uniform(0, math.tau), rnd.uniform(-0.2, 0.9)
             pts.append((-17.3 + math.cos(a) * math.cos(e) * 2.75, 15.3 + math.sin(a) * math.cos(e) * 2.75,
                         8.3 + math.sin(e) * 2.35))
@@ -1047,7 +1097,7 @@ def tower(M, style):
         put(bm_lathe(prof, 20), C["stone"], M, TRUNK_X, TRUNK_Z)
         for (dx, dz, r, col) in ((0.38, -0.25, 0.55, C["leaf3"]), (-0.35, 0.3, 0.55, C["leaf"]), (0.15, 0.42, 0.5, C["leaf2"]),
                                  (-0.3, -0.38, 0.5, C["leaf2"])):
-            put(bm_ellipsoid(r, r, r * 1.15, 16, 10), col, M, TRUNK_X + dx, TRUNK_Z + dz, 0.45 + r * 0.9)
+            put(bm_ellipsoid(r, r, r * 1.15, 14, 9), col, M, TRUNK_X + dx, TRUNK_Z + dz, 0.45 + r * 0.9)
         path = [G(TRUNK_X, TRUNK_Z, 0.0), G(TRUNK_X + 0.1, TRUNK_Z + 0.2, 2.2), G(TRUNK_X - 0.2, TRUNK_Z + 0.6, 4.4),
                 G(TRUNK_X - 0.7, TRUNK_Z + 0.8, 6.6)]
         put(bm_tube(path, 0.3, 16, radii=[0.5, 0.34, 0.28, 0.24]), C["deck_trim"], M, 0, 0)
@@ -1090,12 +1140,18 @@ def shed(M, x, z, rot, body, roof):
 
 # ---------------------------------------------------------------- 잔디 디테일(충돌 없음)
 
+GROUND_TUFTS, TUFT_BLADES, FLOWER_PATCHES = 48, 3, 5
+
+
 def ground_detail():
-    """잔디 풀포기·작은 꽃밭을 흩뿌린다. 충돌 메시(BVH)를 위에서 쏘아 빈 잔디(y≈0)인 곳에만 둔다."""
+    """잔디 풀포기·작은 꽃밭. '디테일은 가장자리로': 펜스 밑 0.6 m 띠, 산울타리 끝, 소품 밑동 1 m 안에만 둔다
+    (넓은 잔디 한가운데 흩뿌리면 가까이선 가시, 멀리선 흙점처럼 보였다).
+    충돌 메시(BVH, 보이지 않는 기둥 포함)를 위에서 쏘아 빈 잔디(y≈0)인 곳에만 둔다.
+    """
     from mathutils.bvhtree import BVHTree
     verts, polys = [], []
     for b in B.buckets.values():
-        if b["kind"] not in ("solid", "col") or b["mat"] == "Invisible":
+        if b["kind"] not in ("solid", "col"):
             continue
         off = len(verts)
         verts.extend(b["verts"])
@@ -1112,43 +1168,69 @@ def ground_detail():
                 return False
         return True
 
-    blade = bm_lathe([(0.035, 0.0), (0.0, 0.26)], 3)
+    half_props = [(-8.0, 14.2), (13.2, 12.2), (-15.5, -7.5),     # 쿨러
+                  (13.8, 8.4),                                   # 토피어리
+                  (-3.5, 15.3), (10.3, 15.0), (-9.3, -4.6),      # 고래·오리·튜브 더미
+                  (6.0, 14.0)]                                   # 분수(수반 밖, 보충 링 근처)
+    props = half_props + [(-x, -z) for x, z in half_props]
+    hedge_ends = [(sx * e, sz * 9.0) for sx in (-1, 1) for sz in (-1, 1) for e in (3.0, 9.0)]
+
+    def candidate(allow_props=True):
+        u = rnd.random()
+        if u < 0.45:                       # 펜스 밑 띠(보이지 않는 벽 안쪽 0.1~0.6 m)
+            side = rnd.randrange(4)
+            d = rnd.uniform(0.1, 0.6)
+            if side < 2:
+                return rnd.uniform(-24.0, 24.0), (1 if side == 0 else -1) * (18.3 - d)
+            return (1 if side == 2 else -1) * (24.3 - d), rnd.uniform(-18.0, 18.0)
+        if u < 0.72 or not allow_props:    # 산울타리 끝(바깥 방향)
+            ex, ez = rnd.choice(hedge_ends)
+            out = math.copysign(1.0, ex) * (1.0 if abs(ex) > 6 else -1.0)
+            return ex + out * rnd.uniform(0.25, 0.9), ez + rnd.uniform(-0.55, 0.55)
+        px, pz = rnd.choice(props)         # 소품 밑동
+        a, rr = rnd.uniform(0, math.tau), rnd.uniform(0.75, 1.5)
+        return px + math.cos(a) * rr, pz + math.sin(a) * rr
+
+    # 풀잎: 5면 + 가운데 링으로 끝을 뭉툭하게(3면 뾰족 원뿔은 가까이서 검은 가시처럼 보였다)
+    blade = bm_lathe([(0.032, 0.0), (0.02, 0.17), (0.0, 0.25)], 5)
     placed = 0
     tries = 0
-    while placed < 150 and tries < 3000:
+    while placed < GROUND_TUFTS and tries < 4000:
         tries += 1
-        x, z = rnd.uniform(-24, 24), rnd.uniform(-18, 18)
-        if not free(x, z):
+        x, z = candidate()
+        if not free(x, z, 0.3):
             continue
         placed += 1
-        col = C["leaf3"] if rnd.random() < 0.6 else C["leaf2"]
-        for k in range(4):
+        for k in range(TUFT_BLADES):
             bm = blade.copy()
-            transform(bm, Matrix.Diagonal((1, 1, rnd.uniform(0.7, 1.3), 1)))
-            transform(bm, rot_y(rnd.uniform(-25, 25)))
+            transform(bm, Matrix.Diagonal((1, 1, rnd.uniform(0.75, 1.3), 1)))
+            transform(bm, rot_y(rnd.uniform(-22, 22)))
             transform(bm, rot_z(rnd.uniform(0, 360)))
-            B.add(bm, col, at(x + rnd.uniform(-0.08, 0.08), z + rnd.uniform(-0.08, 0.08), 0.0), kind="nocol")
+            B.add(bm, C["grass2"], at(x + rnd.uniform(-0.08, 0.08), z + rnd.uniform(-0.08, 0.08), 0.0), kind="nocol")
     blade.free()
     patches = 0
     tries = 0
-    while patches < 18 and tries < 2000:
+    while patches < FLOWER_PATCHES and tries < 3000:
         tries += 1
-        x, z = rnd.uniform(-23.5, 23.5), rnd.uniform(-17.8, 17.8)
-        if not free(x, z, 0.55):
+        x, z = candidate(allow_props=False)
+        if not free(x, z, 0.5):
             continue
         patches += 1
         cols = rnd.choice(([C["white"], C["sun"]], [C["pink"], C["white"]], [C["lavender"], C["white"]],
                            [C["coral"], C["sun"]]))
-        pts = [(x + rnd.uniform(-0.4, 0.4), z + rnd.uniform(-0.4, 0.4), 0.06) for _ in range(6)]
+        pts = [(x + rnd.uniform(-0.35, 0.35), z + rnd.uniform(-0.35, 0.35), 0.06) for _ in range(5)]
         flowers(I4, pts, cols, r=0.07)
 
 
 # ---------------------------------------------------------------- 담장 밖 배경(충돌 없음, 싸게)
 
-def house(x, z, rot, w, d, h, body, roof, door=None):
+def house(x, z, rot, w, d, h, body, roof, door=None, roof_k=0.55):
+    """담장 밖 이웃집(배경). 벽은 지평선색 쪽으로 25% 섞고 지붕 채도는 15% 낮춰 대기 원근처럼 물러나 보이게 한다."""
+    body = mix_hex(body, C["horizon"], 0.25)
+    roof = desat_hex(roof, 0.85)
     m = at(x, z, 0.0, rot)
-    B.add(bm_rbox(w, d, h, r=0.35, segs=2, bulge=0.12), body, m, kind="nocol")
-    prof = fillet_closed([(-d / 2 - 0.6, 0.0), (d / 2 + 0.6, 0.0), (0.0, h * 0.55)], 0.45, 3)
+    B.add(bm_rbox(w, d, h, r=0.35, segs=2, bulge=0.25), body, m, kind="nocol")
+    prof = fillet_closed([(-d / 2 - 0.6, 0.0), (d / 2 + 0.6, 0.0), (0.0, h * roof_k)], 0.45, 3)
     bm = bm_prism(prof, -w / 2 - 0.4, w / 2 + 0.4, bevel=0.1, segs=1, bevel_bottom=True)
     transform(bm, Matrix(((0, 0, 1, 0), (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 0, 1))))
     B.add(bm, roof, m @ tr(0, 0, h - 0.25), kind="nocol")
@@ -1162,57 +1244,57 @@ def house(x, z, rot, w, d, h, body, roof, door=None):
     for sx in (-1, 1):
         for row in ((h * 0.36,) if h < 5.8 else (h * 0.3, h * 0.66)):
             wx = sx * w * 0.3
-            ring = bm_torus(0.55, 0.1, 16, 4)
+            ring = bm_torus(0.55, 0.1, 12, 3)
             transform(ring, rot_x(90))
             B.add(ring, C["white"], m @ tr(wx, front, row), kind="nocol")
-            gl = bm_cyl(0.5, 0.04, 16, 0.0)
+            gl = bm_cyl(0.5, 0.04, 12, 0.0)
             transform(gl, rot_x(90))
             B.add(gl, C["glass"], m @ tr(wx, front + 0.02, row), kind="nocol")
-    for sx in (-1, 1):
-        B.add(bm_ellipsoid(0.8, 0.6, 0.55, 8, 5), C["leaf3"], m @ tr(sx * (w * 0.5 - 0.4), front - 0.6, 0.3), kind="nocol")
+    # (집 앞 덤불은 뺐다: 펜스에 가려 마당에서는 거의 보이지 않았다)
 
 
 def lollipop_tree(x, z, s=1.0, col=None):
     m = at(x, z, 0.0, 0.0)
     B.add(bm_cyl(0.28 * s, 2.4 * s, 10, 0.05, r_top=0.2 * s), C["trunk"], m, kind="nocol")
-    B.add(bm_ellipsoid(1.8 * s, 1.8 * s, 1.65 * s, 12, 7), col or C["leaf"], m @ tr(0, 0, 3.6 * s), kind="nocol")
-    B.add(bm_ellipsoid(1.05 * s, 1.05 * s, 0.95 * s, 8, 5), C["leaf2"], m @ tr(0.7 * s, -0.4 * s, 4.6 * s), kind="nocol")
+    B.add(bm_ellipsoid(1.8 * s, 1.8 * s, 1.65 * s, 16, 9), col or C["leaf"], m @ tr(0, 0, 3.6 * s), kind="nocol")
+    B.add(bm_ellipsoid(1.05 * s, 1.05 * s, 0.95 * s, 10, 6), C["leaf2"], m @ tr(0.7 * s, -0.4 * s, 4.6 * s), kind="nocol")
 
 
 def bush(x, z, s=1.0):
     m = at(x, z, 0.0, 0.0)
-    B.add(bm_ellipsoid(0.9 * s, 0.9 * s, 0.7 * s, 8, 5), C["leaf3"], m @ tr(0, 0, 0.45 * s), kind="nocol")
-    B.add(bm_ellipsoid(0.6 * s, 0.6 * s, 0.5 * s, 6, 4), C["leaf"], m @ tr(0.6 * s, 0.2 * s, 0.4 * s), kind="nocol")
-    B.add(bm_ellipsoid(0.55 * s, 0.55 * s, 0.45 * s, 6, 4), C["leaf2"], m @ tr(-0.5 * s, -0.3 * s, 0.35 * s), kind="nocol")
+    B.add(bm_ellipsoid(0.9 * s, 0.9 * s, 0.7 * s, 12, 8), C["leaf3"], m @ tr(0, 0, 0.45 * s), kind="nocol")
+    B.add(bm_ellipsoid(0.6 * s, 0.6 * s, 0.5 * s, BUSH_SUB[0], BUSH_SUB[1]), C["leaf"], m @ tr(0.6 * s, 0.2 * s, 0.4 * s),
+          kind="nocol")
+    B.add(bm_ellipsoid(0.55 * s, 0.55 * s, 0.45 * s, BUSH_SUB[0], BUSH_SUB[1]), C["leaf2"],
+          m @ tr(-0.5 * s, -0.3 * s, 0.35 * s), kind="nocol")
 
 
-def cloud(x, z, y, s=1.0):
-    m = at(x, z, y, 0.0)
-    for (dx, dy, dz, r) in ((0, 0, 0, 3.0), (2.8, 0.3, -0.4, 2.2), (-2.7, -0.2, -0.5, 2.1), (0.6, 0.4, 1.2, 2.1)):
-        B.add(bm_ellipsoid(r * s, r * s * 0.8, r * s * 0.62, 16, 8), C["white"], m @ tr(dx * s, dy * s, dz * s), kind="nocol")
+BUSH_SUB = (8, 5)
+BUSH_COUNT = 12   # 펜스(1.7 m) 뒤라 마당에서는 윗부분만 보인다 → 개수를 줄이고 분할을 올렸다
 
 
 def backdrop():
-    houses = [(-17, 28.5, 180, 8.0, 7.0, 5.4, C["peach"], C["coral"]),
-              (0.5, 29.5, 180, 9.0, 7.0, 6.2, C["mint"], C["roof_teal"]),
-              (17.5, 28.0, 180, 7.5, 7.0, 5.0, C["lemon"], C["roof_peach"]),
-              (-16.5, -28.5, 0, 8.0, 7.0, 5.6, C["lavender"], C["roof_lav"]),
-              (1.0, -29.5, 0, 9.0, 7.0, 6.2, C["pink"], C["roof_pink"]),
-              (17.5, -28.0, 0, 7.5, 7.0, 5.1, C["mint_lt"], C["coral"]),
-              (33.5, 8.0, -90, 8.0, 7.0, 5.4, C["aqua"], C["roof_peach"]),
-              (34.0, -9.5, -90, 7.0, 7.0, 5.0, C["peach"], C["roof_teal"]),
-              (-33.5, -8.0, 90, 8.0, 7.0, 5.4, C["lemon"], C["roof_pink"]),
-              (-34.0, 9.5, 90, 7.0, 7.0, 5.0, C["mint_lt"], C["coral"])]
+    # 펜스에서 4 m 더 물려(레인·모서리 시야를 덜 채우게) z ±32.5 / x ±37.5 에 둔다.
+    # 키 큰 두 집(6.2 m)은 지붕 경사를 낮춰(0.55 → 0.42) 비스듬히 솟아 보이던 인상을 줄였다.
+    houses = [(-17, 32.5, 180, 8.0, 7.0, 5.4, C["peach"], C["coral"]),
+              (0.5, 33.5, 180, 9.0, 7.0, 6.2, C["mint"], C["roof_teal"], None, 0.42),
+              (17.5, 32.0, 180, 7.5, 7.0, 5.0, C["lemon"], C["roof_peach"]),
+              (-16.5, -32.5, 0, 8.0, 7.0, 5.6, C["lavender"], C["roof_lav"]),
+              (1.0, -33.5, 0, 9.0, 7.0, 6.2, C["pink"], C["roof_pink"], None, 0.42),
+              (17.5, -32.0, 0, 7.5, 7.0, 5.1, C["mint_lt"], C["coral"]),
+              (37.5, 8.0, -90, 8.0, 7.0, 5.4, C["aqua"], C["roof_peach"]),
+              (38.0, -9.5, -90, 7.0, 7.0, 5.0, C["peach"], C["roof_teal"]),
+              (-37.5, -8.0, 90, 8.0, 7.0, 5.4, C["lemon"], C["roof_pink"]),
+              (-38.0, 9.5, 90, 7.0, 7.0, 5.0, C["mint_lt"], C["coral"])]
     for h in houses:
         house(*h)
     rnd = random.Random(42)
     trees = [(-27.5, 22.5), (-8.5, 24.0), (9.0, 23.5), (27.5, 21.0), (-27.0, -21.5), (-8.0, -23.5), (9.5, -24.0),
-             (28.0, -22.5), (29.0, 0.5), (-29.0, -0.5), (30.0, 16.5), (-30.0, -16.5), (-31.0, 17.5), (31.5, -17.0),
-             (-40.0, 30.0), (40.0, -30.0)]
+             (28.0, -22.5), (29.0, 0.5), (-29.0, -0.5), (30.0, 16.5), (-30.0, -16.5), (-31.0, 17.5), (31.5, -17.0)]
     for (x, z) in trees:
         lollipop_tree(x, z, rnd.uniform(0.85, 1.25), rnd.choice([C["leaf"], C["leaf2"], C["leaf3"]]))
-    for k in range(22):
-        t = k / 22
+    for k in range(BUSH_COUNT):
+        t = k / BUSH_COUNT
         per = 2 * (49 + 37)
         s = t * per
         if s < 49:
@@ -1224,10 +1306,7 @@ def backdrop():
         else:
             x, z = -25.6, -18.5 + (s - 135)
         bush(x + rnd.uniform(-0.6, 0.6), z, rnd.uniform(0.8, 1.2))
-    for k in range(4):
-        a = math.tau * k / 4 + 0.5 + rnd.uniform(-0.2, 0.2)
-        rr = rnd.uniform(80, 105)
-        cloud(math.cos(a) * rr, math.sin(a) * rr, rnd.uniform(26, 38), rnd.uniform(1.2, 2.0))
+    # 3D 구름은 두지 않는다: 툰 셰이딩 아래 단계 때문에 베이지 덩어리로 떠 보였고 스카이돔 구름과 겹쳤다
     for k in range(8):
         a = math.tau * k / 8 + 0.3
         rr = 118
@@ -1248,7 +1327,9 @@ def build_patio(M, team):
             return C["patio"] if (math.floor(c.x - 0.35) + math.floor(c.y)) % 2 == 0 else C["patio2"]
         if n.z > 0.2:
             return C["patio_lip"]
-        return C["patio_side"]
+        # 옆면: 1 m 간격 세로 판자 두 톤(16 m 민짜 벽이 비어 보였다)
+        k = math.floor(c.y) if abs(n.x) > 0.5 else math.floor(c.x - 0.35)
+        return C["patio_side"] if k % 2 == 0 else C["wood_dark"]
     put(bm, patio_mat, M, -21.35, 0, -0.3)
 
     # 북·남 계단(보이는 계단 4단 + 그 위 보이지 않는 경사로)
@@ -1267,13 +1348,24 @@ FENCE_Z = 18.45
 
 
 def picket_bm():
-    w, h, t = 0.14, 1.72, 0.045
-    pts = [(-w / 2, 0.0), (w / 2, 0.0)]
-    for k in range(3):
-        a = math.radians(180 * k / 2)
-        pts.append((w / 2 * math.cos(a), h + w / 2 * math.sin(a) * 1.5))
-    bm = bm_prism(pts, -t / 2, t / 2)
-    transform(bm, rot_x(90))  # 외곽(XY) → 세로(XZ), 두께는 Y
+    """피켓 널판(폭 0.16, 두께 0.045): 끝은 늘리지 않은 7점 반원(30° 간격 — 뾰족한 첨두 X).
+
+    펜스를 따라 놓으면 로컬 -Y 가 마당 쪽이다(build_fence 의 rot). 바닥면만 생략한다.
+    널판이 350여 개라 간격(0.5 m)은 삼각형 예산에 맞춘 값이다.
+    """
+    w, h, t = 0.16, 1.72, 0.045
+    r = w / 2
+    outline = [(-r, 0.0), (r, 0.0)] + [(r * math.cos(math.radians(a)), h + r * math.sin(math.radians(a)))
+                                       for a in range(0, 181, 30)]
+    bm = bmesh.new()
+    front = [bm.verts.new((x, -t / 2, y)) for x, y in outline]
+    back = [bm.verts.new((x, t / 2, y)) for x, y in outline]
+    bm.faces.new(front)                    # XZ 에서 반시계 → 법선 -Y(마당 쪽)
+    bm.faces.new(list(reversed(back)))     # 뒷면(외곽선 헐이 실루엣을 그리려면 닫혀 있어야 한다)
+    n = len(outline)
+    for i in range(1, n):                  # i = 0 은 바닥 변(땅에 묻혀 보이지 않음)
+        j = (i + 1) % n
+        bm.faces.new((front[i], back[i], back[j], front[j]))
     return bm
 
 
@@ -1283,7 +1375,7 @@ def fence_floor(x, z):
 
 def build_fence():
     pk = picket_bm()
-    spacing = 0.4
+    spacing = 0.5
     # (시작점, 끝점) 게임 좌표
     sides = [((-FENCE_X, FENCE_Z), (FENCE_X, FENCE_Z)), ((FENCE_X, -FENCE_Z), (-FENCE_X, -FENCE_Z)),
              ((FENCE_X, FENCE_Z), (FENCE_X, -FENCE_Z)), ((-FENCE_X, -FENCE_Z), (-FENCE_X, FENCE_Z))]
@@ -1309,13 +1401,13 @@ def build_fence():
             for hy in (0.45, 1.35):
                 put(bm_rbox(sb - sa, 0.07, 0.1, r=0.03, segs=1), C["fence"], I4, xm, zm, y + hy, rot=rot, kind="nocol",
                     local=tr(0, 0.06, 0))
-        nseg = max(1, round(length / 3.6))
+        nseg = max(1, round(length / 4.5))
         for i in range(nseg + 1):
             s = i * length / nseg
             xa, za = x0 + dx * s, z0 + dz * s
             yp = fence_floor(xa, za)
             put(bm_rbox(0.17, 0.17, 1.95, r=0.04, segs=1), C["fence"], I4, xa, za, yp, rot=rot, kind="nocol")
-            put(bm_sphere(0.11, 6, 3), C["fence"], I4, xa, za, yp + 2.02, kind="nocol")
+            put(bm_sphere(0.11, 8, 4), C["fence"], I4, xa, za, yp + 2.02, kind="nocol")
     pk.free()
 
     # 보이지 않는 경계벽(펜스 2 m + 8 m 이상). 안쪽 면 = ±24.3 / ±18.3
@@ -1331,17 +1423,24 @@ def facing_rot(x, z, tx=0.0, tz=0.0):
     return math.atan2(dx, dz)
 
 
+# 스폰 12곳: 파티오 4곳씩(팀 0 서쪽, 팀 1 동쪽) + 레인 4곳(공용). (x, y, z, team)
+# spawn_01/05 는 (∓21, ±2) 였을 때 가림막 사이 출구로 적 전망대 데크 전체(64점, 37~39 m)에 보였다
+# → 북쪽 격자 뒤 (∓20.6, ±4.8) 로 옮겨 적 데크·적 파티오 어느 점에서도 보이지 않는다(--audit 스폰 노출 0).
+SPAWNS = [(-20.6, 1.0, 4.8, 0), (-21, 1.0, -2, 0), (-21, 1.0, 6, 0), (-21, 1.0, -6, 0),
+          (20.6, 1.0, -4.8, 1), (21, 1.0, 2, 1), (21, 1.0, -6, 1), (21, 1.0, 6, 1),
+          (-10, 0.0, 16, -1), (10, 0.0, -16, -1), (14, 0.0, 15, -1), (-14, 0.0, -15, -1)]
+
+
 def build_markers(root):
-    # 스폰 12곳: 파티오 4곳씩(팀 0 서쪽, 팀 1 동쪽) + 레인 4곳(공용). 모두 맵 중앙을 본다.
-    spawns = [(-21, 1.0, 2, 0), (-21, 1.0, -2, 0), (-21, 1.0, 6, 0), (-21, 1.0, -6, 0),
-              (21, 1.0, -2, 1), (21, 1.0, 2, 1), (21, 1.0, -6, 1), (21, 1.0, 6, 1),
-              (-10, 0.0, 16, -1), (10, 0.0, -16, -1), (14, 0.0, 15, -1), (-14, 0.0, -15, -1)]
-    for i, (x, y, z, team) in enumerate(spawns, 1):
-        empty(f"spawn_{i:02d}", loc=G(x, z, y), parent=root, rot=(0, 0, facing_rot(x, z)), size=0.5,
+    for i, (x, y, z, team) in enumerate(SPAWNS, 1):
+        # 파티오 스폰은 가림막 사이 출구(서 (-17.5, 1) / 동 (17.5, -1))를, 레인 스폰은 맵 중앙을 본다
+        tx, tz = ((-17.5, 1.0) if x < 0 else (17.5, -1.0)) if team >= 0 else (0.0, 0.0)
+        empty(f"spawn_{i:02d}", loc=G(x, z, y), parent=root, rot=(0, 0, facing_rot(x, z, tx, tz)), size=0.5,
               extras={"team": team})
     for i, (x, z) in enumerate(((6, 14), (-6, -14)), 1):
         empty(f"fountain_{i:02d}", loc=G(x, z, 0.0), parent=root, size=0.5, extras={"radius": 1.5})
-    for i, (px, pz, tx, tz) in enumerate(((-7, 5, -14, 12), (7, -5, 14, -12)), 1):
+    tx0, tz0 = JUMP_TARGET
+    for i, (px, pz, tx, tz) in enumerate(((-7, 5, tx0, tz0), (7, -5, -tx0, -tz0)), 1):
         empty(f"jumppad_{i:02d}", loc=G(px, pz, PAD_TOP), parent=root, size=0.5,
               extras={"target": f"jumptarget_{i:02d}", "radius": 1.1})
         empty(f"jumptarget_{i:02d}", loc=G(tx, tz, 3.6), parent=root, size=0.5)
@@ -1356,33 +1455,48 @@ PAD_TOP = 0.13
 # 봇 웨이포인트(서쪽 절반 + 수영장). 이름 뒤 a = 이 좌표, b = 원점 대칭(180°) 짝.
 # 간선은 봇이 똑바로 걸어갈 수 있는 곳만(경사로 OK, 점프대·낮은 가구·울타리 피함). --audit 로 검사.
 WP_HALF = {
-    "A1": ((-21.0, 1.0, 0.0), ["A4a", "A5a"]),            # 서쪽 파티오 가운데
-    "A4": ((-21.0, 0.0, 11.0), ["A1a", "A7a", "A15a"]),   # 북쪽 계단 아래
-    "A5": ((-21.0, 0.0, -11.0), ["A1a", "A25a"]),         # 남쪽 계단 아래
-    "A7": ((-15.5, 0.0, 8.5), ["A4a", "A8a", "A16a", "A22a"]),
-    "A8": ((-15.3, 0.0, -5.0), ["A7a", "A30a", "A32a"]),
-    "A9": ((-10.0, 0.0, 16.6), ["A11a", "A15a"]),         # 북쪽 레인(스폰)
+    # 파티오 출구 쪽(가장자리에서 1.6 m): 봇은 목표가 3 m 안이고 0.6 m 이상 높을 때만 뛰므로 출구 밖 잔디에서
+    # 파티오(+1.0)로 뛰어오를 수 있게 가장자리 가까이 둔다
+    "A1": ((-19.6, 1.0, 1.0), ["A34a", "A35a", "A39a"]),  # 서쪽 파티오(출구 앞)
+    "A4": ((-21.0, 0.0, 11.0), ["A34a", "A7a", "A15a"]),  # 북쪽 계단 아래
+    "A5": ((-21.0, 0.0, -11.0), ["A35a", "A25a", "A38a", "A40a"]),  # 남쪽 계단 아래
+    "A7": ((-15.5, 0.0, 8.5), ["A4a", "A33a", "A16a", "A22a", "A41a"]),
+    "A8": ((-15.3, 0.0, -5.0), ["A33a", "A30a", "A32a"]),
+    "A9": ((-10.0, 0.0, 16.6), ["A11a", "A15a", "A37a"]),  # 북쪽 레인(스폰)
     "A11": ((0.0, 0.0, 11.0), ["A9a", "A12a", "A17a", "A23a", "A28b"]),
     "A12": ((-5.4, 0.0, 11.6), ["A11a", "A13a", "A17a"]),  # 트리하우스 경사로 아래
     "A13": ((-13.4, 3.6, 11.7), ["A12a"]),                 # 트리하우스 데크
     "A15": ((-20.2, 0.0, 16.8), ["A4a", "A9a"]),          # 북서 모서리
-    "A16": ((-10.5, 0.0, 9.9), ["A7a", "A17a", "A22a"]),
+    "A16": ((-10.5, 0.0, 9.9), ["A7a", "A17a", "A22a", "A41a"]),
     "A17": ((-5.4, 0.0, 10.1), ["A16a", "A12a", "A11a"]),  # 울타리·경사로 사이 통로
-    "A18": ((-8.3, 0.0, 0.6), ["A19a", "A22a", "A32a", "P1a", "A21a"]),  # 수영장 데크 서쪽 끝
-    "A19": ((-5.2, 0.0, 4.4), ["A18a", "A20a"]),
+    "A18": ((-8.3, 0.0, 0.6), ["A19a", "A22a", "A32a", "P1a", "A21a", "A42a"]),  # 수영장 데크 서쪽 끝
+    "A19": ((-5.2, 0.0, 4.4), ["A18a", "A20a", "A36a"]),
     "A20": ((0.0, 0.0, 3.55), ["A19a", "A31b"]),           # 티키 바 앞 데크
-    "A21": ((-10.6, 0.0, 2.0), ["A18a"]),                  # 카바나 안
-    "A22": ((-8.5, 0.0, 6.9), ["A7a", "A16a", "A18a", "A23a"]),
-    "A23": ((0.0, 0.0, 7.6), ["A11a", "A22a", "A24b"]),     # 티키 바 뒤
+    "A21": ((-10.0, 0.0, 2.0), ["A18a"]),                  # 카바나 안(뒷벽에서 떨어뜨림)
+    "A22": ((-8.5, 0.0, 6.9), ["A7a", "A16a", "A18a", "A23a", "A36a", "A41a"]),
+    "A23": ((0.0, 0.0, 7.6), ["A11a", "A22a", "A24b", "A36a"]),  # 티키 바 뒤
     "A24": ((-8.5, 0.0, -7.3), ["A30a", "A31a", "A23b"]),
-    "A25": ((-14.5, 0.0, -14.2), ["A5a", "A26a"]),         # 남서(스폰)
+    "A25": ((-14.5, 0.0, -14.2), ["A5a", "A26a", "A40a"]),  # 남서(스폰)
     "A26": ((-7.0, 0.0, -11.3), ["A25a", "A30a", "A28a"]),  # 분수 F2 북쪽
     "A28": ((-2.4, 0.0, -15.0), ["A26a", "A11b"]),
-    "A30": ((-10.9, 0.0, -9.4), ["A8a", "A24a", "A26a", "A32a"]),
-    "A31": ((-5.2, 0.0, -4.4), ["A24a", "A20b"]),
-    "A32": ((-11.3, 0.0, -2.2), ["A8a", "A18a", "A30a"]),
-    "P1": ((-4.3, -0.65, 0.0), ["A18a", "P2a", "P2b"]),     # 수영장 바닥
-    "P2": ((0.0, -0.65, 1.7), ["P1a", "P1b"]),
+    "A30": ((-10.9, 0.0, -9.4), ["A8a", "A24a", "A26a", "A32a", "A40a"]),
+    "A31": ((-5.2, 0.0, -4.4), ["A24a", "A20b", "A42a"]),
+    "A32": ((-11.3, 0.0, -2.8), ["A8a", "A18a", "A30a", "A33a"]),
+    # 레벨 디자인 검토에서 '가장 가까운 웨이포인트가 벽 너머'였던 빈 곳을 채운 점들
+    "A33": ((-14.6, 0.0, 1.8), ["A7a", "A8a", "A32a", "A39a"]),  # 서쪽 파티오 출구 앞
+    "A34": ((-21.3, 1.0, 5.2), ["A1a", "A4a"]),            # 파티오 북쪽(스폰 사이)
+    "A35": ((-21.3, 1.0, -5.2), ["A1a", "A5a"]),           # 파티오 남쪽
+    "A36": ((-5.5, 0.0, 7.4), ["A19a", "A22a", "A23a"]),   # 울타리 남쪽 통로
+    "A37": ((-9.3, 0.0, 13.4), ["A9a"]),                   # 트리하우스 경사로 북쪽 빈 곳
+    # 2차: 격자 점에서 nearest() 가 벽·소품 너머였던 곳(지면 1 m 격자 1.8% → 목표 0%)
+    "A38": ((-19.6, 0.0, -16.2), ["A5a"]),                 # 남서 창고와 관목 사이 구석
+    "A39": ((-16.4, 0.0, 1.0), ["A1a", "A33a"]),           # 서쪽 파티오 출구 밖 잔디(파티오로 뛰어오름)
+    "A40": ((-15.6, 0.0, -10.2), ["A5a", "A25a", "A30a"]),  # 남서 쿨러 남쪽
+    "A41": ((-10.8, 0.0, 5.4), ["A7a", "A16a", "A22a"]),   # 카바나 북쪽 벽 밖
+    "A42": ((-8.6, 0.0, -3.6), ["A18a", "A31a"]),          # 에어매트·튜브 더미 사이
+    # 수영장 바닥: 홍학(−2.2, 0.9)·백조(2.2, −0.9)를 비껴 지나간다
+    "P1": ((-4.3, -0.65, 0.0), ["A18a", "P2a"]),
+    "P2": ((0.0, -0.65, -1.7), ["P1a", "P2b"]),
 }
 
 
@@ -1451,18 +1565,21 @@ def run_audit():
             n, v = buckets.get(k, (0, 0))
             buckets[k] = (n + 1, v + (1 if vis else 0))
             if vis and d > 35:
-                long_lines.append((d, ta, tb))
+                long_lines.append((d, ta, tb, a, b))
     print(f"[audit] sight points={len(pts)}")
     for k in sorted(buckets):
         n, v = buckets[k]
         print(f"[audit]   {k:2d}-{k + 5:2d} m: pairs={n:6d} visible={v:6d} ({100 * v / n:5.1f}%)")
-    long_lines.sort(reverse=True)
+    long_lines.sort(key=lambda r: -r[0])
     print(f"[audit] visible sightlines > 35 m: {len(long_lines)}")
-    for d, ta, tb in long_lines[:10]:
+    for d, ta, tb, _a, _b in long_lines[:10]:
         print(f"[audit]   {d:.1f} m  {ta} <-> {tb}")
+    _spawn_exposure(bvh)
+    _suggest_blockers(bvh, long_lines)
 
     problems = 0
     seen = set()
+    jump_links = set()
     pads = [(-7.0, 5.0), (7.0, -5.0)]
     for wid, (x, y, z, links) in WAYPOINTS.items():
         for other in links:
@@ -1476,6 +1593,7 @@ def run_audit():
             prev = y
             bad = None
             steep = 0
+            step_at = None
             for k in range(n + 1):
                 t = k / n
                 px, pz = x + (x2 - x) * t, z + (z2 - z) * t
@@ -1490,9 +1608,19 @@ def run_audit():
                     bad = f"가파름 @({px:.1f},{pz:.1f})"
                     break
                 if k and abs(loc.z - prev) > 0.2:
+                    # 봇은 목표가 3 m 안이고 0.6 m 이상 높으면 뛴다(bots.ts followPath) → 1 m 턱은 높은 쪽 끝이
+                    # 3 m 안이면 '점프 간선'으로 인정(파티오 출구). 반대 방향은 그냥 걸어 내려간다.
+                    hx, hz = (x2, z2) if y2 > y else (x, z)
+                    if abs(loc.z - prev) <= 1.05 and math.hypot(px - hx, pz - hz) < 2.8 and abs(y2 - y) >= 0.6:
+                        jump_links.add(key)
+                        step_at = (px, pz)
+                        prev = loc.z
+                        continue
                     bad = f"단차 {loc.z - prev:+.2f} m @({px:.1f},{pz:.1f})"
                     break
                 prev = loc.z
+                if step_at and math.hypot(px - step_at[0], pz - step_at[1]) < 0.7:
+                    continue  # 점프 턱 바로 옆은 캡슐이 턱에 닿는 게 정상
                 for h in (0.5, 0.95, 1.4):
                     near = bvh.find_nearest(G(px, pz, loc.z + h), 0.37)
                     if near[0] is not None:
@@ -1508,7 +1636,84 @@ def run_audit():
             if bad:
                 problems += 1
                 print(f"[audit] link {wid} - {other}: {bad}")
-    print(f"[audit] waypoint links={len(seen)} problems={problems}")
+    print(f"[audit] waypoint links={len(seen)} problems={problems} jump-up links={len(jump_links)} "
+          f"({', '.join('-'.join(k) for k in sorted(jump_links))})")
+
+
+def _spawn_exposure(bvh):
+    """팀 스폰(눈높이)이 적 전망대 데크(0.5 m 격자)·적 파티오(1 m 격자)에서 보이는 점 수, 스폰끼리·파티오끼리 시야."""
+    eye = 1.42
+
+    def vis(a, b):
+        d = (b - a).length
+        return bvh.ray_cast(a, (b - a) / d, d - 0.05)[0] is None
+
+    def deck_pts(sign):
+        return [G(sign * (TOWER_X - 1.75 + 0.5 * i), sign * (TOWER_Z - 1.75 + 0.5 * j), TOWER_TOP + eye)
+                for i in range(8) for j in range(8)]
+
+    def patio_pts(sign):
+        return [G(sign * (-23.5 + i), sign * (-7.5 + j), 1.0 + eye) for i in range(6) for j in range(16)]
+    total = 0
+    for i, (x, y, z, team) in enumerate(SPAWNS, 1):
+        if team < 0:
+            continue
+        e = G(x, z, y + eye)
+        # 팀 0(서쪽)의 적 = 동쪽(남동 전망대·동쪽 파티오) = 서쪽 자료의 원점 대칭(-1)
+        tw = sum(vis(e, p) for p in deck_pts(-1 if team == 0 else 1))
+        pt = sum(vis(e, p) for p in patio_pts(-1 if team == 0 else 1))
+        total += tw + pt
+        print(f"[audit]   spawn_{i:02d} ({x},{z}) team {team}: seen from enemy deck pts={tw}/64, enemy patio pts={pt}/96")
+    pairs = 0
+    for i, (x, y, z, t) in enumerate(SPAWNS):
+        for j, (x2, y2, z2, t2) in enumerate(SPAWNS):
+            if j <= i or t < 0 or t2 < 0 or t == t2:
+                continue
+            if vis(G(x, z, y + eye), G(x2, z2, y2 + eye)):
+                pairs += 1
+                print(f"[audit]   spawn_{i + 1:02d} <-> spawn_{j + 1:02d} visible")
+    pp = sum(vis(a, b) for a in patio_pts(1) for b in patio_pts(-1))
+    print(f"[audit] spawn exposure total={total} enemy-spawn pairs visible={pairs} patio<->patio visible pairs={pp}/{96 * 96}")
+
+
+def _suggest_blockers(bvh, long_lines, top=8):
+    """35 m 넘는 시야선을 가장 많이 끊는 차단물 자리(원점 대칭 쌍, 높이 2.2 m·반지름 0.6 m 기둥 가정)를 욕심껏 고른다.
+
+    후보는 1 m 격자 중 빈 잔디/데크(주변 0.9 m 안 0.3~2 m 높이에 충돌체 없음). 출력만 하고 맵은 바꾸지 않는다.
+    """
+    down = Vector((0, 0, -1))
+    cands = []
+    for x in range(-22, 23):
+        for z in range(-16, 17):
+            loc = bvh.ray_cast(G(x, z, 6.0), down, 8.0)[0]
+            if loc is None or abs(loc.z) > 0.05 or DECK_SDF(x, -z) < 0.0:
+                continue
+            if any(bvh.find_nearest(G(x, z, h), 0.9)[0] is not None for h in (1.0, 1.7)):
+                continue
+            cands.append((x, z))
+    remaining = list(range(len(long_lines)))
+
+    def hits(cx, cz, idxs):
+        out = []
+        for i in idxs:
+            a, b = long_lines[i][3], long_lines[i][4]
+            dx, dy = b.x - a.x, b.y - a.y
+            L2 = dx * dx + dy * dy
+            t = max(0.0, min(1.0, ((cx - a.x) * dx + (-cz - a.y) * dy) / L2))
+            if math.hypot(a.x + dx * t - cx, a.y + dy * t + cz) < 0.6 and a.z + (b.z - a.z) * t < 2.2:
+                out.append(i)
+        return out
+    print(f"[audit] blocker suggestions (symmetric pairs, greedy; {len(cands)} free cells):")
+    for _ in range(top):
+        best, best_hits = None, []
+        for (cx, cz) in cands:
+            h = set(hits(cx, cz, remaining)) | set(hits(-cx, -cz, remaining))
+            if len(h) > len(best_hits):
+                best, best_hits = (cx, cz), list(h)
+        if not best or not best_hits:
+            break
+        remaining = [i for i in remaining if i not in set(best_hits)]
+        print(f"[audit]   ({best[0]:+d}, {best[1]:+d}) & ({-best[0]:+d}, {-best[1]:+d}): -{len(best_hits)} → {len(remaining)} left")
 
 
 # ---------------------------------------------------------------- 미리보기
@@ -1652,7 +1857,7 @@ def main():
             hedge(M, -9.0, -3.0, 9.0)
             hedge(M, 3.0, 9.0, 9.0)
         with stage("jumppad"):
-            jump_pad(M, -7.0, 5.0)
+            jump_pad(M, -7.0, 5.0, *JUMP_TARGET)
         with stage("fountain"):
             fountain(M, 6.0, 14.0)
         with stage("laundry+rack"):
@@ -1668,26 +1873,26 @@ def main():
         with stage("props"):
             float_stack(M, -9.3, -4.6)
             leaning_raft(M, -9.6, -2.8, 0)
-            cooler(M, -8.0, 13.6, 15, C["aqua"] if team == 0 else C["coral"])
-            cooler(M, 12.0, 11.2, 80, C["mint"] if team == 0 else C["sun"])
+            # 쿨러 뚜껑(0.86 m)은 산울타리에서 4 m 넘게 떨어뜨린다(뚜껑에서 뛰어 울타리 위로 올라서지 못하게)
+            cooler(M, -8.0, 14.2, 15, C["aqua"] if team == 0 else C["coral"])
+            cooler(M, 13.2, 12.2, 80, C["mint"] if team == 0 else C["butter"])
             cooler(M, -15.5, -7.5, 10, C["pink"] if team == 0 else C["aqua"])
             lounger(M, 5.4, 16.6, 90, C["aqua"])
             lounger(M, 7.2, 16.6, 90, C["peach"])
-            rubber_duck(M, 10.3, 15.0, 120 if team == 0 else 60)
-            whale(M, 2.2, 10.7, 170)
+            rubber_duck(M, 10.3, 15.0, 120)
+            # 고래는 북쪽(스폰) 레인 빨랫줄 옆: 산울타리 사이에 두면 두 울타리를 잇는 징검다리가 됐다
+            whale(M, -3.5, 15.3, 90)
         with stage("plants"):
             shrub(M, -22.8, 14.2, 1.15)
-            planter(M, 3.7, 12.4)
-            topiary(M, -14.0, 6.6)
-            banana_plant(M, 9.8, 6.4)
+            # (전망대 앞 토피어리·바나나 화분은 뺐다: 데크에서 뛰어 꼭대기에 올라 카바나 지붕·울타리로 번지는 길이 됐다)
             topiary(M, 13.8, 8.4)
             shrub(M, 17.2, 16.2, 1.25)
-            banana_plant(M, -18.8, -7.3, 1.0)
+        with stage("pool toys"):
+            flamingo(M, -2.2, 0.9, 25, swan=team == 1)
     with stage("pool toys"):
-        flamingo(0.0, 0.0, 25)
-        donut(-3.9, 1.1, C["pink"])
-        donut(3.9, -1.1, C["aqua"])
-        beach_ball(-2.6, -1.6)
+        donut(-4.4, -1.4, C["pink"])
+        donut(4.4, 1.4, C["aqua"])
+        beach_ball(-0.6, -2.1)
     with stage("fence"):
         build_fence()
     with stage("ground detail"):
