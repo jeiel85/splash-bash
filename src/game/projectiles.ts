@@ -95,40 +95,65 @@ const _up = new THREE.Vector3(0, 1, 0);
 const _x = new THREE.Vector3(1, 0, 0);
 const _hsl = { h: 0, s: 0, l: 0 };
 
+/** 캡슐 축 길이(m): 아래 반구 중심(발 위 radius)부터 위 반구 중심(발 위 height-radius)까지 */
+const AXIS_LEN = PLAYER.height - 2 * PLAYER.radius;
+/** 이보다 짧은(길이² m²) 선분은 점으로 본다 */
+const POINT_EPS = 1e-12;
+/** 수평 길이² / 전체 길이² 가 이보다 작으면 축과 나란한 선분으로 본다(0 나눗셈·정밀도 손실 방지, 오차 < 0.01 mm) */
+const PARALLEL_EPS = 1e-10;
+
 /**
- * 선분 p→q 와 캡슐 축(발 위 radius ~ height-radius 수직선) 사이 최단거리².
- * out 에는 선분 위 최근접점을 쓴다. 두 선분 최근접점 공식을 수직축에 특화해 계산한다.
+ * 선분 p→q 와 캡슐 축(발 위 radius ~ height-radius 수직선) 사이 최단거리²(참값).
+ * out 에는 선분 위 최근접점을 쓴다. 두 선분 최근접점(Ericson, Real-Time Collision Detection 5.1.9)을 수직축에 특화했다:
+ * 선분 p + s·d (s∈[0,1]), 축 A + u·ŷ (u∈[0,AXIS_LEN]).
+ * 1) 두 직선의 최근접 s(= 수평 최근접점)를 [0,1] 로 자른다. 2) 그 s 에서 축 위 u 를 구한다.
+ * 3) u 가 축 밖(머리 위·발 아래)이면 u 를 그 끝(반구 중심)에 고정하고 s 를 그 점에서 선분으로 내린 수선의 발로 다시 구한다.
+ * 3단계가 없으면 기울어진 탄도가 머리·발을 스칠 때 거리를 크게 잡아 빗맞는다. 물방울 × 대상 × 프레임마다 불리므로 할당하지 않는다.
  */
 export function segCapsuleDistSq(p: THREE.Vector3, q: THREE.Vector3, feet: THREE.Vector3, out: THREE.Vector3): number {
-  const y0 = feet.y + PLAYER.radius;
-  const y1 = feet.y + PLAYER.height - PLAYER.radius;
   const dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
-  let best = Infinity;
-  const test = (t: number) => {
-    const x = p.x + dx * t, y = p.y + dy * t, z = p.z + dz * t;
-    const cy = Math.min(Math.max(y, y0), y1);
-    const ex = x - feet.x, ey = y - cy, ez = z - feet.z;
-    const d = ex * ex + ey * ey + ez * ez;
-    if (d < best) {
-      best = d;
-      out.set(x, y, z);
+  // r = p - A (A: 아래 반구 중심)
+  const rx = p.x - feet.x, ry = p.y - (feet.y + PLAYER.radius), rz = p.z - feet.z;
+  const a = dx * dx + dy * dy + dz * dz;
+  let s = 0;
+  let u: number;
+  if (a > POINT_EPS) {
+    const hl = dx * dx + dz * dz;
+    // 축과 나란하면 어느 s 든 두 직선 사이 거리가 같으므로 시작점(s=0)에서 출발한다
+    if (hl > PARALLEL_EPS * a) s = Math.min(Math.max(-(rx * dx + rz * dz) / hl, 0), 1);
+    u = ry + s * dy;
+    if (u < 0) {
+      // 발 아래: 아래 반구 중심에서 선분으로 내린 수선의 발
+      u = 0;
+      s = Math.min(Math.max(-(rx * dx + ry * dy + rz * dz) / a, 0), 1);
+    } else if (u > AXIS_LEN) {
+      // 머리 위: 위 반구 중심에서 선분으로 내린 수선의 발
+      u = AXIS_LEN;
+      s = Math.min(Math.max(-(rx * dx + (ry - AXIS_LEN) * dy + rz * dz) / a, 0), 1);
     }
-  };
-  test(0);
-  test(1);
-  const hl = dx * dx + dz * dz;
-  if (hl > 1e-9) {
-    const t = ((feet.x - p.x) * dx + (feet.z - p.z) * dz) / hl;
-    if (t > 0 && t < 1) test(t);
+  } else {
+    u = Math.min(Math.max(ry, 0), AXIS_LEN);
   }
-  // 캡슐 위·아래 끝 높이를 지나는 지점(수직 이동이 큰 경우)
-  if (Math.abs(dy) > 1e-6) {
-    for (const yy of [y0, y1]) {
-      const t = (yy - p.y) / dy;
-      if (t > 0 && t < 1) test(t);
-    }
-  }
-  return best;
+  out.set(p.x + dx * s, p.y + dy * s, p.z + dz * s);
+  const ex = rx + dx * s, ey = ry + dy * s - u, ez = rz + dz * s;
+  return ex * ex + ey * ey + ez * ez;
+}
+
+/** 원격 발사 지연 보정(advance) 상한(초) */
+const MAX_ADVANCE = 0.2;
+/**
+ * 지연 보정 적분 간격 상한(초) — 평소 프레임(60fps)과 같은 간격.
+ * 한 번의 큰 오일러 스텝으로 적분하면 직진 시간(양동이 0.1초)을 넘긴 공기저항·중력이 구간 전체에 한꺼번에 걸려
+ * 양동이 물이 발밑에 떨어지고 물풍선이 짧게 터진다(원격 화면·넉백 위치가 쏜 사람과 어긋남).
+ */
+const ADVANCE_STEP = 1 / 60;
+
+/**
+ * 상한을 적용한 지연 보정 시간(adv, 초)을 ADVANCE_STEP 이하의 같은 간격으로 나눌 개수(보정 없으면 0).
+ * 딱 나눠떨어지는 값이 부동소수 오차로 정수를 살짝 넘어도 아주 짧은 한 칸이 더 생기지 않게 조금 깎는다
+ */
+function advanceSteps(adv: number): number {
+  return adv > 0 ? Math.max(1, Math.ceil(adv / ADVANCE_STEP - 1e-9)) : 0;
 }
 
 /** 이동 거리에 따른 적심 감소 */
@@ -224,12 +249,15 @@ export class ProjectileSystem {
 
   /**
    * 총 발사. origin 은 총구, aim 은 조준 방향(정규화).
-   * @param advance 네트워크 지연 보정 — 이만큼(초) 이미 날아간 상태로 시작
+   * @param advance 네트워크 지연 보정 — 이만큼(초, 최대 MAX_ADVANCE) 이미 날아간 상태로 시작. 평소 프레임 간격으로 나눠 적분한다
    */
   fireGun(shooter: PeerId, team: TeamId, weapon: WeaponId, origin: THREE.Vector3, aim: THREE.Vector3, seed: number, spread: number,
     authoritative: boolean, color: THREE.Color, advance = 0): void {
     const def = WEAPONS[weapon];
     pelletDirections(def, aim, seed, spread, _dirs);
+    const adv = Math.min(advance, MAX_ADVANCE);
+    const steps = advanceSteps(adv);
+    const h = steps > 0 ? adv / steps : 0;
     for (let i = 0; i < _dirs.length; i++) {
       const dir = _dirs[i];
       const d = this.alloc();
@@ -245,10 +273,11 @@ export class ProjectileSystem {
       d.traveled = 0;
       d.color.copy(color);
       d.wobble = ((seed + i * 97) % 628) / 100;
-      if (advance > 0) this.stepDroplet(d, Math.min(advance, 0.2));
+      for (let k = 0; k < steps && d.active; k++) this.stepDroplet(d, h);
     }
   }
 
+  /** 물풍선 던지기. inherit 는 던진 사람 속도, advance 는 fireGun 과 같다 */
   throwBalloon(shooter: PeerId, team: TeamId, origin: THREE.Vector3, aim: THREE.Vector3, inherit: THREE.Vector3,
     authoritative: boolean, color: THREE.Color, advance = 0): void {
     const b = this.balloons.find((x) => !x.active) ?? this.balloons[0];
@@ -263,7 +292,10 @@ export class ProjectileSystem {
     b.age = 0;
     b.spin = 0;
     b.color.copy(color);
-    if (advance > 0) this.stepBalloon(b, Math.min(advance, 0.2));
+    const adv = Math.min(advance, MAX_ADVANCE);
+    const steps = advanceSteps(adv);
+    const h = steps > 0 ? adv / steps : 0;
+    for (let k = 0; k < steps && b.active; k++) this.stepBalloon(b, h);
   }
 
   update(dt: number): void {
