@@ -1,6 +1,6 @@
 /**
  * 인게임 스크린샷(연습 모드, 봇 없이 가만히 서서 찍기).
- *   node tools/ingame-shot.mjs <out.png> x y z yawDeg pitchDeg [width height] [--map=test]
+ *   node tools/ingame-shot.mjs <out.png> x y z yawDeg pitchDeg [width height] [--map=test] [--weapon=1|2|3]
  * 개발 서버(http://127.0.0.1:5317)와 DEV 빌드의 window.__splash 디버그 API 를 쓴다.
  */
 import { chromium } from 'playwright';
@@ -13,6 +13,7 @@ if (!out || z === undefined) {
   process.exit(2);
 }
 const map = flags.find((f) => f.startsWith('--map='))?.slice(6);
+const weapon = flags.find((f) => f.startsWith('--weapon='))?.slice(9);
 const base = process.env.BASE_URL ?? 'http://127.0.0.1:5317';
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 try {
@@ -31,7 +32,12 @@ try {
     s.look((yaw * Math.PI) / 180, (pitch * Math.PI) / 180);
     document.querySelector('.click-to-play')?.classList.add('hidden');
   }, [Number(x), Number(y), Number(z), Number(yaw), Number(pitch)]);
-  await page.waitForTimeout(700);
+  if (weapon) {
+    await page.evaluate((slot) => window.__splash.setIntent({ weaponSlot: slot }), Number(weapon) - 1);
+    await page.waitForTimeout(100);
+    await page.evaluate(() => window.__splash.setIntent(null));
+  }
+  await page.waitForTimeout(900);
   await page.evaluate(([yaw, pitch]) => window.__splash.look((yaw * Math.PI) / 180, (pitch * Math.PI) / 180), [Number(yaw), Number(pitch)]);
   await page.waitForTimeout(150);
   await page.screenshot({ path: out });

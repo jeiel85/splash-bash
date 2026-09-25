@@ -42,19 +42,19 @@ const HAND_SIZE = 0.095;
 /** 무기별 1인칭 구도: 화면 오른쪽 아래 1/3, 총의 실루엣이 읽히고 장갑 손이 손잡이·앞손잡이를 쥔다 */
 const HOLD: Record<WeaponId, Hold> = {
   pistol: {
-    pos: new THREE.Vector3(0.2, -0.22, -0.38), yaw: deg(3), pitch: deg(-3), roll: deg(-4), length: 0.27,
+    pos: new THREE.Vector3(0.2, -0.2, -0.44), yaw: deg(9), pitch: deg(-4), roll: deg(-6), length: 0.23,
     right: { pos: new THREE.Vector3(0, -0.01, -0.025), rot: new THREE.Euler(deg(10), 0, 0) },
     left: null,
     kick: 1.2, puff: 0.7,
   },
   soaker: {
-    pos: new THREE.Vector3(0.21, -0.29, -0.4), yaw: deg(3), pitch: deg(-3), roll: deg(-4), length: 0.58,
+    pos: new THREE.Vector3(0.23, -0.27, -0.5), yaw: deg(4), pitch: deg(-3), roll: deg(-4), length: 0.5,
     right: { pos: new THREE.Vector3(0, -0.01, -0.03), rot: new THREE.Euler(deg(10), 0, 0) },
     left: { pos: new THREE.Vector3(0.01, -0.02, 0), rot: new THREE.Euler(deg(-5), 0, deg(-20)), pump: true },
     kick: 0.8, puff: 1,
   },
   bucket: {
-    pos: new THREE.Vector3(0.22, -0.29, -0.4), yaw: deg(3), pitch: deg(-3), roll: deg(-4), length: 0.5,
+    pos: new THREE.Vector3(0.23, -0.26, -0.5), yaw: deg(7), pitch: deg(-3), roll: deg(-5), length: 0.4,
     right: { pos: new THREE.Vector3(0, -0.01, -0.03), rot: new THREE.Euler(deg(10), 0, 0) },
     left: { pos: new THREE.Vector3(0.005, -0.035, 0.22), rot: new THREE.Euler(0, 0, deg(-40)), pump: false },
     kick: 1, puff: 1.5,
