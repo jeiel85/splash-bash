@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SETTINGS, normalizeRoomCode, parseSettings, roomCodeFromHash } from '../src/ui/profile';
+import { DEFAULT_SETTINGS, normalizeRoomCode, parseSettings, roomCodeFromHash, roomCodeHint } from '../src/ui/profile';
 
 describe('설정 불러오기(parseSettings)', () => {
   it('예전 저장본(음악·효과음·움직임 줄이기 없음)은 기존 값을 살리고 새 항목만 기본값', () => {
@@ -45,5 +45,18 @@ describe('초대 코드', () => {
     expect(normalizeRoomCode('abc')).toBeNull();
     expect(normalizeRoomCode(' ab-cd ')).toBe('ABCD');
     expect(normalizeRoomCode('ABCDEFGHJ')).toBeNull();
+  });
+
+  it('거절 이유 안내: 헷갈리는 글자(0·1·O·I)는 따로 알려 준다', () => {
+    const confusing = '헷갈리는 글자(0, 1, O, I)는 방 코드에 없어요. 코드를 다시 확인해 주세요';
+    for (const bad of ['K7QM0', 'k1ab', 'abode', 'pixel', 'O0O0']) {
+      expect(normalizeRoomCode(bad)).toBeNull();
+      expect(roomCodeHint(bad)).toBe(confusing);
+    }
+    // 길이가 틀린 경우도 헷갈리는 글자가 있으면 그 이유가 먼저
+    expect(roomCodeHint('ABCDEFGHJO')).toBe(confusing);
+    expect(roomCodeHint('abc')).toBe('방 코드를 확인해 주세요 (영문·숫자 4~8자)');
+    expect(roomCodeHint('ABCDEFGHJK')).toBe('방 코드를 확인해 주세요 (영문·숫자 4~8자)');
+    expect(roomCodeHint('  -- ')).toBe('방 코드를 입력해 주세요');
   });
 });

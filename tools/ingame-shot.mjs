@@ -20,7 +20,8 @@ try {
   const page = await browser.newPage({ viewport: { width: Number(w), height: Number(h) } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto(`${base}/?bots=0${map ? `&map=${map}` : ''}`);
+  // pause=0: 포인터 잠금이 없어도 연습 모드 시뮬레이션을 계속 돌린다(DEV 전용 — 잠금이 풀리면 연습은 멈추므로)
+  await page.goto(`${base}/?bots=0&pause=0${map ? `&map=${map}` : ''}`);
   await page.waitForFunction(() => window.__ready === true, null, { timeout: 90000 });
   const err = await page.evaluate(() => window.__error ?? null);
   if (err) throw new Error(err);

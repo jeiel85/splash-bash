@@ -3,6 +3,7 @@ import type { Sfx } from '../audio/sfx';
 import type { DamageSource, GameMode, MatchPhase, TeamId, WeaponId } from '../types';
 import { WEAPON_IDS } from '../types';
 import { DROP_ICON, iconEl } from './icons';
+import { resultsLayout, scoreboardEntries, type TableEntry } from './ranking';
 
 export type MoveState = 'still' | 'moving' | 'air';
 
@@ -71,15 +72,8 @@ function fmtTime(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** 개인 순위: 적심 많이 → 덜 젖음 → 이름 */
-function byScore(a: ScoreRow, b: ScoreRow): number {
-  return b.splashes - a.splashes || a.soaked - b.soaked || a.name.localeCompare(b.name);
-}
-
-/** 점수판 순서: 팀전이면 팀별로 묶는다 */
-function sortRows(rows: ScoreRow[], mode: GameMode): ScoreRow[] {
-  return [...rows].sort((a, b) => (mode === 'tdm' ? a.team - b.team : 0) || byScore(a, b));
-}
+/** 점수 표 머리줄. 캐주얼 플레이어도 바로 알아보게 줄임말(적심·젖음) 대신 "몇 번 적셨나 / 몇 번 젖었나" */
+const TABLE_HEAD = ['#', '이름', '적신 수', '젖은 수', '핑'] as const;
 
 /** 연속 기록(흠뻑 젖지 않고 연달아 적심) 알림 */
 const STREAK_CALLOUTS: Record<number, { title: string; sub: string }> = {
@@ -772,7 +766,7 @@ export class Hud {
         el('span', 'ink', t, `${TEAM_NAMES[team]} ${this.teamScores[team]}`);
       }
     }
-    this.renderTable(box, rows, mode);
+    this.renderTable(box, scoreboardEntries(rows, mode), mode);
     this.renderInviteLine(box);
   }
 
@@ -789,7 +783,7 @@ export class Hud {
     // 점수는 결과 화면 동안 멈춰 있지만 사람이 나가고 들어올 수 있다 — 1초마다 확인해 바뀌었을 때만 다시 그린다
     if (this.clock >= this.resultsNextAt) {
       this.resultsNextAt = this.clock + 1;
-      const key = `${title}|${rows.map((r) => `${r.id}:${r.splashes}:${r.soaked}:${r.color}:${r.name}`).join(',')}`;
+      const key = `${title}|${this.teamScores[0]}:${this.teamScores[1]}|${rows.map((r) => `${r.id}:${r.splashes}:${r.soaked}:${r.color}:${r.name}:${r.team}`).join(',')}`;
       if (key !== this.resultsKey) {
         this.resultsKey = key;
         this.buildResults(title, rows, mode);
@@ -822,12 +816,13 @@ export class Hud {
         el('span', 'ink', t, `${TEAM_NAMES[team]} ${this.teamScores[team]}`);
       }
     }
-    // 시상대: 가운데 1등, 왼쪽 2등, 오른쪽 3등
-    const ranked = [...rows].sort(byScore);
-    const podium = el('div', 'podium', box);
+    // 시상대: 가운데 1등, 왼쪽 2등, 오른쪽 3등. 팀전에서 한 팀이 이기면 이긴 팀 선수만 오른다
+    const layout = resultsLayout(rows, mode, this.teamScores);
+    const podium = el('div', `podium${layout.winnerTeam !== null ? ' team-win' : ''}`, box);
+    if (layout.winnerTeam !== null) podium.style.setProperty('--team', TEAM_COLORS[layout.winnerTeam]);
     const order = [1, 0, 2];
     for (const i of order) {
-      const r = ranked[i];
+      const r = layout.podium[i];
       const slot = el('div', `podium-slot p${i + 1}${r ? '' : ' empty'}`, podium);
       if (!r) continue;
       const bean = el('div', 'podium-bean', slot);
@@ -837,10 +832,10 @@ export class Hud {
       const name = el('div', 'podium-name ink', slot, r.name);
       name.title = r.name;
       if (r.isSelf) el('span', 'sb-tag me', slot, '나');
-      el('div', 'podium-score', slot, `${r.splashes} 적심`);
+      el('div', 'podium-score', slot, `적신 수 ${r.splashes}`);
       el('div', 'podium-block', slot, String(i + 1));
     }
-    if (rows.length > 3) this.renderTable(box, rows, mode, 3);
+    if (layout.table.length) this.renderTable(box, layout.table, mode);
     this.resultsNext = el('div', 'results-next', box);
     this.renderInviteLine(box);
   }
@@ -853,24 +848,30 @@ export class Hud {
     el('span', 'invite-hint', line, 'Esc → 초대 링크 복사');
   }
 
-  /**
-   * @param skipTop 결과 화면: 시상대에 오른 사람 수(표에서는 빼고, 순위는 개인 점수로 이어서 매긴다).
-   *                점수판(0): 팀전이면 팀별로 묶고 순위도 팀 안에서 매긴다.
-   */
-  private renderTable(box: HTMLElement, rows: ScoreRow[], mode: GameMode, skipTop = 0): void {
+  /** 팀 머리줄 내용: 팀 색 점 + 팀 이름(이긴 팀은 🏆) */
+  private teamLabel(target: HTMLElement, entry: Extract<TableEntry, { kind: 'team' }>): void {
+    target.classList.toggle('winner', entry.winner);
+    if (entry.team === 0 || entry.team === 1) target.style.setProperty('--team', TEAM_COLORS[entry.team]);
+    el('span', 'sb-group-dot', target);
+    el('span', '', target, `${entry.team === 0 || entry.team === 1 ? TEAM_NAMES[entry.team] : '팀 없음'}${entry.winner ? ' 🏆' : ''}`);
+  }
+
+  /** 점수 표. 줄 순서·순위·팀 머리줄은 ranking.ts 가 정한다 */
+  private renderTable(box: HTMLElement, entries: readonly TableEntry[], mode: GameMode): void {
     const table = el('div', 'sb-table', box);
     const head = el('div', 'sb-row sb-head', table);
-    ['#', '이름', '적심', '젖음', '핑'].forEach((h) => el('span', '', head, h));
-    const sorted = skipTop ? [...rows].sort(byScore) : sortRows(rows, mode);
-    let rank = 0;
-    let team: TeamId | null = null;
-    sorted.forEach((r, i) => {
-      if (!skipTop && mode === 'tdm' && r.team !== team) {
-        team = r.team;
-        rank = 0;
+    // 첫 팀 머리줄은 열 이름 줄의 "이름" 자리에 넣는다(결과 패널이 길어져 상단 시계를 가리지 않게)
+    const first = entries[0]?.kind === 'team' ? entries[0] : null;
+    TABLE_HEAD.forEach((text, i) => {
+      if (i === 1 && first) this.teamLabel(el('span', 'sb-group', head), first);
+      else el('span', '', head, text);
+    });
+    for (const entry of entries) {
+      if (entry.kind === 'team') {
+        if (entry !== first) this.teamLabel(el('div', 'sb-group', table), entry);
+        continue;
       }
-      rank++;
-      if (i < skipTop) return;
+      const { row: r, rank } = entry;
       const row = el('div', `sb-row${r.isSelf ? ' self' : ''}`, table);
       if (mode === 'tdm' && (r.team === 0 || r.team === 1)) row.style.setProperty('--team', TEAM_COLORS[r.team]);
       row.classList.toggle('teamed', mode === 'tdm');
@@ -887,7 +888,7 @@ export class Hud {
       el('span', 'sb-num dim', row, String(r.soaked));
       const ping = el('span', 'sb-ping', row, r.isBot || r.isSelf ? '-' : r.ping === null ? '…' : `${Math.round(r.ping)}`);
       if (!r.isBot && !r.isSelf && r.ping !== null) ping.dataset.q = r.ping < 90 ? 'good' : r.ping < 180 ? 'ok' : 'bad';
-    });
+    }
   }
 }
 

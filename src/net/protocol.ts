@@ -37,12 +37,24 @@ function str(v: unknown, max: number): string | null {
   return typeof v === 'string' && v.length > 0 && v.length <= max ? v : null;
 }
 
-/** 닉네임 정리: 제어문자 제거, 공백 정리, 길이 제한 */
+const NAME_MAX = 14;
+
+/**
+ * 닉네임 정리: 제어문자·보이지 않는 글자·방향 바꿈 문자 제거, 공백 정리, 길이 제한(UTF-16 14칸).
+ * 이모지 잇기 문자(ZWJ, U+200D)는 남긴다 — 가족 이모지처럼 이어 만든 이모지가 여러 사람으로 쪼개지지 않게. 이을 대상이 없는 ZWJ(맨 앞·끝, 연속)는 뺀다.
+ */
 export function sanitizeName(raw: unknown): string {
   const s = typeof raw === 'string' ? raw : '';
-  // eslint-disable-next-line no-control-regex
-  const cleaned = s.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim();
-  return cleaned.slice(0, 14) || '물총러';
+  const cleaned = s
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b\u200c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  let out = cleaned.slice(0, NAME_MAX);
+  // 서로게이트 쌍(이모지 등) 가운데에서 잘렸으면 반쪽 글자를 버린다
+  if (out.length === NAME_MAX && /[\ud800-\udbff]$/.test(out)) out = out.slice(0, -1);
+  out = out.replace(/\u200d{2,}/g, '\u200d').replace(/^[\s\u200d]+|[\s\u200d]+$/g, '');
+  return out || '물총러';
 }
 
 // ------------------------------------------------------------------ player info

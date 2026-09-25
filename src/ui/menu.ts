@@ -2,7 +2,7 @@ import { GAME_VERSION, PLAYER_COLORS } from '../config';
 import type { SfxName } from '../audio/sfx';
 import { HAT_IDS, type GameMode, type HatId } from '../types';
 import { sanitizeName } from '../net/protocol';
-import { inviteLink, normalizeRoomCode, SETTING_RANGES, type Profile, type Settings } from './profile';
+import { inviteLink, normalizeRoomCode, roomCodeHint, SETTING_RANGES, type Profile, type Settings } from './profile';
 
 export type PlayChoice =
   | { kind: 'quick' }
@@ -336,7 +336,7 @@ export class Menu {
     const join = () => {
       const c = normalizeRoomCode(this.codeInput.value);
       if (!c) {
-        this.setStatus('방 코드를 확인해 주세요 (영문·숫자 4~8자)', 'error');
+        this.setStatus(roomCodeHint(this.codeInput.value), 'error');
         this.codeInput.focus();
         return;
       }
@@ -460,12 +460,17 @@ export class PauseMenu {
   readonly root: HTMLDivElement;
   private readonly invite: InviteCard;
   private readonly panel: SettingsPanel;
+  private readonly onlineNote: HTMLDivElement;
 
   constructor(parent: HTMLElement, settings: Settings, onSettings: (s: Settings) => void, onResume: () => void, onLeave: () => void, sound: UiSound) {
     this.root = el('div', 'pause hidden', parent);
     const card = el('div', 'pause-card', this.root);
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', '일시정지');
     const left = el('div', 'pause-col', card);
     el('div', 'pause-title', left, '잠깐 쉬는 중');
+    // 연습은 이 동안 멈추지만 온라인은 다른 사람이 계속 움직인다
+    this.onlineNote = el('div', 'pause-note hidden', left, '온라인 경기는 멈추지 않아요 — 쉬는 동안에도 젖을 수 있어요!');
     const resume = el('button', 'btn big primary', left, '계속하기');
     resume.type = 'button';
     resume.addEventListener('click', () => {
@@ -483,10 +488,12 @@ export class PauseMenu {
     this.panel = buildSettings(right, settings, onSettings);
   }
 
-  show(v: boolean, roomCode: string | null): void {
+  /** @param online 온라인 경기면 "멈추지 않아요" 안내를 보인다 */
+  show(v: boolean, roomCode: string | null, online = false): void {
     this.root.classList.toggle('hidden', !v);
     if (v) {
       this.invite.set(roomCode);
+      this.onlineNote.classList.toggle('hidden', !online);
       this.panel.refresh();
     }
   }

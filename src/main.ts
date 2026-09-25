@@ -2,6 +2,7 @@ import '@fontsource/jua';
 import './ui/styles.css';
 import { MATCH, NET } from './config';
 import { Input } from './core/input';
+import { FrameClock, simulationPaused } from './core/loop';
 import { Sfx } from './audio/sfx';
 import { RenderContext } from './render/renderer';
 import { loadAssets, loadMap, type GameAssets } from './render/assets';
@@ -218,7 +219,8 @@ function start(ctx: RenderContext): void {
     if (!game) return;
     game.setInputEnabled(locked);
     prompt.show(false);
-    pause.show(!locked, game.roomCode);
+    // 연습은 잠금이 풀린 동안 시뮬레이션이 멈춘다(step). 온라인은 멈출 수 없다고 카드에 알린다
+    pause.show(!locked, game.roomCode, game.session.online);
   });
 
   async function boot(): Promise<void> {
@@ -286,9 +288,10 @@ function start(ctx: RenderContext): void {
         } else {
           roomCode = choice.kind === 'create' ? makeRoomCode() : choice.code;
           if (choice.kind === 'create') mode = choice.mode;
-          connecting.show(choice.kind === 'create' ? `방 ${roomCode} 만드는 중…` : `방 ${roomCode} 에 들어가는 중…`, choice.kind === 'create' ? '만들고 나면 초대 링크를 복사할 수 있어요' : '친구들을 찾고 있어요');
+          // 문구에서 코드 바로 뒤에 조사를 붙이지 않는다(난수 코드라 받침 유무에 따라 을/를·이/가가 틀린다)
+          connecting.show(choice.kind === 'create' ? `방 만드는 중… (코드 ${roomCode})` : `방에 들어가는 중… (코드 ${roomCode})`, choice.kind === 'create' ? '만들고 나면 초대 링크를 복사할 수 있어요' : '친구들을 찾고 있어요');
           const joined = await joinRoom(`room-${roomCode}`, roomCode, choice.kind === 'create' ? 0 : NET.discover.joinWaitMs, abort.signal);
-          if (!joined) throw new FriendlyError(`방 ${roomCode} 이 가득 찼어요 (최대 ${MATCH.maxPlayers}명). 다른 방을 만들어 보세요.`);
+          if (!joined) throw new FriendlyError(`방이 가득 찼어요 (코드 ${roomCode}, 최대 ${MATCH.maxPlayers}명). 다른 방을 만들어 보세요.`);
           transport = joined.transport;
           warning = joined.warning;
           roomLabel = `방 ${roomCode}`;
@@ -331,7 +334,7 @@ function start(ctx: RenderContext): void {
       if (choice.kind !== 'practice') input.requestLock();
       prompt.show(true, roomCode);
     }
-    if (choice.kind === 'create') hud.toast(`방 ${roomCode} 을 만들었어요! Esc → 초대 링크 복사 💌`, 7);
+    if (choice.kind === 'create') hud.toast(`방을 만들었어요! 코드 ${roomCode} · Esc → 초대 링크 복사 💌`, 7);
     else if (choice.kind === 'join' && transport.peers().length === 0) hud.toast('아직 아무도 없어요. 친구에게 방 코드를 알려 주세요!', 5);
     else if (choice.kind === 'quick' && transport.peers().length === 0) hud.toast('지금은 봇들과 먼저 놀아요. 누가 들어오면 알려 줄게요!', 5);
     if (warning) hud.toast('온라인 연결이 불안정해요 — 친구가 못 들어올 수도 있어요', 5);
@@ -372,19 +375,25 @@ function start(ctx: RenderContext): void {
 
   // ---------------------------------------------------------------- loop
 
-  const MAX_STEP = 0.05;
-  let last = performance.now();
+  // 긴 프레임(탭 전환 등)은 잘게 나눠 시뮬레이션. 멈춘 동안 흐른 시간은 버린다(다시 움직일 때 한꺼번에 밀려들지 않게)
+  const clock = new FrameClock(performance.now());
+  // DEV 전용 ?pause=0 : 포인터 잠금 없이 연습 모드를 계속 돌린다(tools/ingame-shot.mjs 같은 자동화 스크린샷용)
+  const neverPause = import.meta.env.DEV && new URLSearchParams(location.search).get('pause') === '0';
+  /** 한 번이라도 update 한 게임(첫 프레임은 멈춤이어도 카메라·HUD 를 맞추려고 돌린다) */
+  let tickedGame: Game | null = null;
+  const tick = (h: number): void => {
+    if (game) {
+      game.update(h);
+      tickedGame = game;
+    } else {
+      stage?.update(h);
+    }
+  };
 
   function step(now: number): void {
-    let dt = Math.min(1, (now - last) / 1000);
-    last = now;
-    // 긴 프레임(탭 전환 등)은 잘게 나눠 시뮬레이션
-    while (dt > 0) {
-      const h = Math.min(MAX_STEP, dt);
-      if (game) game.update(h);
-      else stage?.update(h);
-      dt -= h;
-    }
+    if (!game) tickedGame = null;
+    const paused = game !== null && !neverPause && simulationPaused(game.session.online, input.locked, tickedGame === game);
+    clock.advance(now, paused, tick);
   }
 
   function frame(now: number): void {

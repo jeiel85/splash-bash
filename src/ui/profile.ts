@@ -138,9 +138,27 @@ export function makeRoomCode(): string {
   return [...bytes].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
 }
 
+const ROOM_CODE_MIN = 4;
+const ROOM_CODE_MAX = 8;
+
+function roomCodeChars(raw: string): string {
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
 export function normalizeRoomCode(raw: string): string | null {
-  const c = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return c.length >= 4 && c.length <= 8 && [...c].every((ch) => CODE_ALPHABET.includes(ch)) ? c : null;
+  const c = roomCodeChars(raw);
+  return c.length >= ROOM_CODE_MIN && c.length <= ROOM_CODE_MAX && [...c].every((ch) => CODE_ALPHABET.includes(ch)) ? c : null;
+}
+
+/**
+ * normalizeRoomCode 가 거절한 입력에 대한 안내 문구. 코드 알파벳은 헷갈리는 글자(0·1·O·I)를 빼고 만들므로,
+ * 그 글자가 들어 있으면 이유를 알려 준다(오타를 알아채도록).
+ */
+export function roomCodeHint(raw: string): string {
+  const c = roomCodeChars(raw);
+  if (!c) return '방 코드를 입력해 주세요';
+  if ([...c].some((ch) => !CODE_ALPHABET.includes(ch))) return '헷갈리는 글자(0, 1, O, I)는 방 코드에 없어요. 코드를 다시 확인해 주세요';
+  return `방 코드를 확인해 주세요 (영문·숫자 ${ROOM_CODE_MIN}~${ROOM_CODE_MAX}자)`;
 }
 
 /** URL 해시(#room=CODE)에서 초대 코드를 읽는다 */

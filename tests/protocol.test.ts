@@ -214,6 +214,31 @@ describe('protocol — 잘못된·악의적 입력 거부', () => {
     expect(sanitizeName('​​')).toBe('물총러');
   });
 
+  it('이름: 이모지 잇기 문자(ZWJ)는 남기고 다른 보이지 않는 글자·방향 바꿈은 뺀다', () => {
+    const ZWJ = '‍';
+    const family = `\u{1F468}${ZWJ}\u{1F469}${ZWJ}\u{1F467}`;
+    // QA: 가족 이모지가 세 사람으로 쪼개지던 문제
+    expect(sanitizeName(family)).toBe(family);
+    expect(sanitizeName(`물총${family}`)).toBe(`물총${family}`);
+    // 여전히 빼는 것: 폭 없는 공백·ZWNJ·방향 표시(LRM/RLM)·방향 덮어쓰기(RLO)·격리(LRI)
+    expect(sanitizeName('a​b‌c‎d‏e‮f⁦g')).toBe('abcdefg');
+    // 이을 대상이 없는 ZWJ(앞·뒤·연속)는 뺀다
+    expect(sanitizeName(`${ZWJ}${ZWJ}오리${ZWJ}`)).toBe('오리');
+    expect(sanitizeName(`\u{1F468}${ZWJ}${ZWJ}${ZWJ}\u{1F469}`)).toBe(`\u{1F468}${ZWJ}\u{1F469}`);
+    expect(sanitizeName(ZWJ.repeat(5))).toBe('물총러');
+  });
+
+  it('이름: 14칸에서 자를 때 이모지(서로게이트 쌍) 반쪽이나 끝의 ZWJ 를 남기지 않는다', () => {
+    const cut = sanitizeName(`${'가'.repeat(13)}\u{1F4A7}`);
+    expect(cut).toBe('가'.repeat(13));
+    expect(cut.length).toBeLessThanOrEqual(14);
+    // 13번째 칸 뒤가 ZWJ 로 끝나면 그 ZWJ 는 뺀다(앞 사람 이모지만 남음)
+    const zwjEnd = sanitizeName(`${'a'.repeat(11)}\u{1F468}‍\u{1F469}`);
+    expect(zwjEnd).toBe(`${'a'.repeat(11)}\u{1F468}`);
+    expect(zwjEnd.length).toBeLessThanOrEqual(14);
+    expect(/[\ud800-\udbff]$/.test(sanitizeName(`${'b'.repeat(13)}\u{1F468}`))).toBe(false);
+  });
+
   it('정보 목록·봇 상태 목록은 최대 인원까지만', () => {
     const infos = Array.from({ length: 50 }, (_, i) => encodeInfo({ ...INFO, id: `p${i}` }));
     expect(decodeInfos(infos)).toHaveLength(MATCH.maxPlayers);

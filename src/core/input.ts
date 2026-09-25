@@ -56,7 +56,9 @@ export class Input extends Emitter<InputEvents> {
     };
     on(document, 'keydown', (e) => {
       if (this.isTypingTarget(e.target)) return;
-      if (e.code === 'Tab' || (this._locked && e.code === 'Space')) e.preventDefault();
+      // 게임 중(포인터 잠금)에만 브라우저 기본 동작을 막는다: Tab = 점수판, Space = 점프.
+      // 메뉴·설정·일시정지에서는 Tab 으로 포커스를 옮기고 Space 로 버튼을 누를 수 있어야 한다
+      if (this._locked && (e.code === 'Tab' || e.code === 'Space')) e.preventDefault();
       if (!e.repeat) {
         this.keys.add(e.code);
         this.pressed.add(e.code);
@@ -122,8 +124,9 @@ export class Input extends Emitter<InputEvents> {
     if (this._locked) document.exitPointerLock();
   }
 
+  /** 게임 키를 누르고 있는지. 포인터 잠금이 풀린 동안(메뉴에서 Tab 으로 포커스 이동 등)은 게임 입력이 아니므로 false */
   isDown(code: string): boolean {
-    return this.keys.has(code);
+    return this._locked && this.keys.has(code);
   }
 
   /** 누적된 마우스 이동을 라디안 단위 yaw/pitch 변화량으로 돌려주고 비운다. */
