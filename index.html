@@ -2,16 +2,35 @@
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="귀여운 물총 싸움 브라우저 FPS — 설치 없이 친구와 바로 온라인 대전!" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="귀여운 물총 싸움 브라우저 FPS — 설치 없이 링크 하나로 친구와 바로 온라인 대전!" />
     <meta name="theme-color" content="#6EC6FF" />
+    <meta property="og:title" content="Splash Bash! 물총 대소동" />
+    <meta property="og:description" content="귀여운 콩 캐릭터들의 뒷마당 물총 대소동. 설치 없이 링크 하나로 친구와 바로 대전!" />
+    <meta property="og:type" content="website" />
     <title>Splash Bash! 물총 대소동</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 4C22 20 12 30 12 42a20 20 0 0 0 40 0C52 30 42 20 32 4z' fill='%234FD1E8' stroke='%232B2D42' stroke-width='4'/%3E%3Ccircle cx='25' cy='40' r='4' fill='%232B2D42'/%3E%3Ccircle cx='39' cy='40' r='4' fill='%232B2D42'/%3E%3C/svg%3E" />
+    <style>
+      /* JS·폰트가 오기 전 첫 화면(스크립트가 메뉴를 만들면 지운다) */
+      html, body { margin: 0; height: 100%; background: linear-gradient(180deg, #6ec6ff, #d4f1ff); }
+      #boot {
+        position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+        font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif; color: #2b1d4a; font-size: 20px; font-weight: 700;
+      }
+      #boot .boot-drop {
+        width: 34px; height: 34px; background: #4fd1e8; border: 4px solid #2b1d4a; border-radius: 0 50% 50% 50%;
+        transform: rotate(45deg); animation: boot-hop 0.9s ease-in-out infinite;
+      }
+      @keyframes boot-hop { 50% { transform: translateY(-14px) rotate(45deg); } }
+      @media (prefers-reduced-motion: reduce) { #boot .boot-drop { animation: none; } }
+    </style>
   </head>
   <body>
     <div id="app"></div>
-    <div id="ui"></div>
-    <noscript>이 게임은 JavaScript 가 필요해요.</noscript>
+    <div id="ui">
+      <div id="boot" role="status"><div class="boot-drop"></div>물총에 물 채우는 중…</div>
+    </div>
+    <noscript>이 게임은 JavaScript 가 필요해요. 브라우저에서 JavaScript 를 켜 주세요.</noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
