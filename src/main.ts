@@ -158,7 +158,9 @@ async function play(choice: PlayChoice): Promise<void> {
     connecting.classList.add('hidden');
     stage?.exit();
     menu.show(false);
-    game = new Game(ctx, input, sfx, hud, assets, map, { transport, roomLabel, roomCode, mode, botFill: true, profile });
+    // ?bots=0 : 봇 없이(맵 확인·테스트용)
+    const botFill = new URLSearchParams(location.search).get('bots') !== '0';
+    game = new Game(ctx, input, sfx, hud, assets, map, { transport, roomLabel, roomCode, mode, botFill, profile });
     game.on('notice', (text) => hud.toast(text));
     game.setInputEnabled(input.locked);
     if (!input.locked) clickToPlay.classList.remove('hidden');

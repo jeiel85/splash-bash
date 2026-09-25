@@ -44,8 +44,8 @@
 - 흰 펜스 `#FFF6E8`, 모래 `#F6DDA4`
 - 포인트: 코랄 `#FF7B7B`, 햇살 노랑 `#FFD35C`, 민트 `#7EE0C3`, 라벤더 `#B9A6FF`, 핑크 `#FF9CCB`, 오렌지 `#FFA552`
 - 외곽선: `#2B2D42`
-- 플레이어 색(8): `#FF6F7D` `#4DB8FF` `#FFD23F` `#3DDC97` `#A78BFA` `#FF9F5A` `#FF8AD8` `#A3E635`
-- 팀 색: A `#FF6F91`, B `#36C5F0`
+- 플레이어 색(8): `#FF8A1F` `#7B5CFF` `#FF4F8B` `#19C3A6` `#FFD23F` `#3D8BFF` `#A0E426` `#FF6F7D` (`src/config.ts` PLAYER_COLORS 가 기준)
+- 팀 색: 탠저린 `#FF8A1F`, 그레이프 `#7B5CFF` (파란색은 물·하늘과 겹쳐 팀 색으로 쓰지 않음)
 
 ## 파일별 규약
 
@@ -81,10 +81,20 @@
 - Empty 마커(custom property → glTF extras):
   - `spawn_XX` — 스폰 지점. extras `team`: -1(공용)/0/1. 회전(Z축) = 바라보는 방향
   - `fountain_XX` — 물 보충 분수. extras `radius`(m)
-  - `jumppad_XX` — 점프대(트램펄린). extras `power`(상승 속도 m/s)
+  - `jumppad_XX` — 점프대(트램펄린) 윗면 중심. extras `target`: 착지 목표 Empty 이름(예 `jumptarget_01`) — 런타임이 최고점 = 목표 높이 + 1 m 가 되도록 탄도를 풀어 발사. `radius`(기본 1.1)
+  - `jumptarget_XX` — 점프대 착지 목표(전망대 바닥 위 등)
   - `wp_XX` — 봇 웨이포인트. extras `links`: `"wp_03,wp_07"` (양방향 간선)
   - `balloon_XX` — 물풍선 보급 상자 위치
   - `bounds` — extras `minX,maxX,minZ,maxZ,killY`
+
+### 레벨 치수(캐릭터 물리 기준)
+
+- 캡슐 반지름 0.4 m, 키 1.6 m, 점프 최고 1.2 m → 0.9~1.0 m 는 점프로 오를 수 있고, 1.6 m 이상은 못 넘는다.
+- **계단은 오를 수 없다**(캡슐이 모서리에 걸림). 걸어서 오르내리는 높이 차는 **경사 ≤ 35° 램프**로 만든다.
+  시각적 계단이 필요하면 계단 위에 `col_` + `Invisible` 경사로를 겹쳐 둔다.
+- 바닥으로 인정되는 경사: 법선 y ≥ 0.64 (≈ 50°).
+- 드로우콜: 정적 메시는 머티리얼별로 합쳐 맵 전체 250 이하. 충돌 이름 규칙(`nocol_`, `water_`, `col_`)을 지키며 합칠 것.
+- 검증: `npx vitest run tests/map.test.ts` (스폰 안착, 점프대 착지, 웨이포인트 연결, 경계).
 
 ## 미리보기
 

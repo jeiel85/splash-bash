@@ -13,7 +13,7 @@ import { Session } from '../net/session';
 import type { Transport } from '../net/transport';
 import type { NetHit, NetShot, NetSplash } from '../net/protocol';
 import type { DamageSource, GameMode, MatchState, PeerId, PlayerInfo, TeamId } from '../types';
-import { isInWater, type GameMap, type SpawnPoint } from '../world/map';
+import { isInWater, solvePadLaunch, type GameMap, type SpawnPoint } from '../world/map';
 import { Avatar } from './avatar';
 import { BotActor, RemoteActor, Vitality } from './actors';
 import { BotBrain, botName, type BotPercept } from './bots';
@@ -49,6 +49,8 @@ export interface DebugApi {
   setIntent(i: Partial<Intent> | null): void;
   aimAt(id: PeerId): boolean;
   teleport(x: number, y: number, z: number): void;
+  /** 시선 설정(라디안). yaw 0 = −Z 방향 */
+  look(yaw: number, pitch: number): void;
 }
 
 const _v = new THREE.Vector3();
@@ -711,7 +713,10 @@ export class Game extends Emitter<GameEvents> {
       const dx = pad.pos.x - body.position.x;
       const dz = pad.pos.z - body.position.z;
       if (dx * dx + dz * dz <= pad.radius * pad.radius && Math.abs(body.position.y - pad.pos.y) < 0.6 && body.velocity.y <= 0.5) {
-        body.launch(pad.power, undefined, true);
+        const v = solvePadLaunch(pad, body.position, PLAYER.gravity);
+        body.velocity.x = 0;
+        body.velocity.z = 0;
+        body.launch(v.vy, _v2.set(v.vx, 0, v.vz), true);
         if (isLocal) this.padCooldown = JUMPPAD.cooldown;
         this.sfx.play('jumppad', { pos: pad.pos });
         this.fx.sprinkle(pad.pos, 8);
@@ -955,6 +960,10 @@ export class Game extends Emitter<GameEvents> {
         return true;
       },
       teleport: (x, y, z) => this.body.teleport(_v.set(x, y, z), this.body.yaw),
+      look: (yaw, pitch) => {
+        this.body.yaw = yaw;
+        this.body.pitch = pitch;
+      },
     };
     (window as unknown as { __splash: DebugApi }).__splash = api;
   }
