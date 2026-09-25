@@ -1,0 +1,43 @@
+name: CI
+
+# 풀 리퀘스트마다 타입 검사·단위/규약/맵 검증 테스트·빌드를 돌린다.
+# 실제 P2P 다중 브라우저 E2E(npm run test:e2e)는 공개 Nostr 릴레이에 의존해 CI 에서는 돌리지 않는다.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit, contract and map tests
+        run: npx vitest run
+
+      - name: Build
+        run: npx vite build
