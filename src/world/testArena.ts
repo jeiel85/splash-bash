@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildMapFromScene, type GameMap } from './map';
+import { makeToonMaterial, makeWaterMaterial } from '../render/toon';
 
 /**
  * 코드로 만드는 단순 시험장. 단위 테스트(물리·봇)와 `?map=test` 개발 모드에서 쓴다.
@@ -8,9 +9,9 @@ import { buildMapFromScene, type GameMap } from './map';
 export function buildTestArena(): GameMap {
   const root = new THREE.Group();
   root.name = 'Map';
-  const mat = new THREE.MeshToonMaterial({ color: '#8BD66B' });
-  const wallMat = new THREE.MeshToonMaterial({ color: '#FFF6E8' });
-  const crateMat = new THREE.MeshToonMaterial({ color: '#E8B07A' });
+  const mat = makeToonMaterial({ color: '#8BD66B' });
+  const wallMat = makeToonMaterial({ color: '#FFF6E8' });
+  const crateMat = makeToonMaterial({ color: '#E8B07A' });
 
   const box = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, m: THREE.Material) => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
@@ -38,7 +39,7 @@ export function buildTestArena(): GameMap {
   root.add(ramp);
 
   // 얕은 수영장 수면(충돌 없음)
-  const water = new THREE.Mesh(new THREE.BoxGeometry(6, 0.1, 6), new THREE.MeshToonMaterial({ color: '#4FD1E8', transparent: true, opacity: 0.7 }));
+  const water = new THREE.Mesh(new THREE.BoxGeometry(6, 0.1, 6), makeWaterMaterial());
   water.name = 'water_pool';
   water.position.set(-8, 0.05, -8);
   root.add(water);

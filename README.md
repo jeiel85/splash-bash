@@ -42,7 +42,7 @@
 npm install
 npm run dev          # http://127.0.0.1:5317  (?map=test 시험장, ?bots=0 봇 끄기)
 npm test             # 단위·규약·맵 검증 테스트
-npm run test:e2e     # 실제 P2P 다중 브라우저 테스트(개발 서버 필요, 인터넷 필요)
+npm run test:e2e     # 실제 P2P 다중 브라우저 테스트(자체 서버를 띄움, 인터넷 필요)
 npm run build        # 타입 검사 + 정적 빌드(dist/)
 ```
 

@@ -94,8 +94,11 @@ function friendlyMessage(err: unknown): string {
 
 interface Joined { transport: Transport; warning: string | null }
 
-/** 방에 참가하고 피어를 잠시 찾아본다. 정원이 찼으면 null. 취소되면 방을 나가고 AbortError */
-async function joinRoom(roomId: string, password: string | undefined, signal: AbortSignal): Promise<Joined | null> {
+/**
+ * 방에 참가하고 피어를 찾아본다. 첫 피어가 오면 조금 더(settle) 모은 뒤, 아무도 없으면 waitMs 뒤 돌아온다.
+ * 정원이 찼으면 null. 취소되면 방을 나가고 AbortError.
+ */
+async function joinRoom(roomId: string, password: string | undefined, waitMs: number, signal: AbortSignal): Promise<Joined | null> {
   const t = new TrysteroTransport(roomId, password);
   let warning: string | null = null;
   t.onError = (msg) => {
@@ -103,10 +106,20 @@ async function joinRoom(roomId: string, password: string | undefined, signal: Ab
     console.warn('[net] 방 참가 중 오류', msg);
   };
   try {
-    await wait(NET.discoverMs, signal);
+    if (waitMs > 0) {
+      const firstPeer = new Promise<void>((resolve) => {
+        if (t.peers().length) resolve();
+        t.onPeerJoin = () => resolve();
+      });
+      const found = await Promise.race([firstPeer.then(() => true), wait(waitMs, signal).then(() => false)]);
+      if (found) await wait(NET.discover.settleMs, signal);
+    }
   } catch (err) {
     await t.leave().catch((e: unknown) => console.warn('[net] 취소 후 방 나가기 실패', e));
     throw err;
+  } finally {
+    // Session 이 이어받아 다시 설정한다(이미 연결된 피어에게는 Session 이 hello 를 방송)
+    t.onPeerJoin = null;
   }
   t.onError = null;
   if (t.peers().length >= MATCH.maxPlayers) {
@@ -129,6 +142,8 @@ function start(ctx: RenderContext): void {
   let game: Game | null = null;
   let starting = false;
   let connectAbort: AbortController | null = null;
+  /** 빠른 대전에서 처음 확인할 방 번호(정원 초과로 밀려났을 때 다음 방부터) */
+  let nextQuickRoom = 1;
 
   function applySettings(p: Profile): void {
     const s = p.settings;
@@ -258,10 +273,11 @@ function start(ctx: RenderContext): void {
         if (choice.kind === 'quick') {
           mode = 'ffa';
           let found: Joined | null = null;
-          let n = 1;
+          let n = nextQuickRoom;
+          nextQuickRoom = 1;
           for (; n <= NET.quickRoomCount && !found; n++) {
             connecting.show('물총 친구 찾는 중…', n === 1 ? '아무도 없으면 봇들과 먼저 시작해요' : `${n - 1}번 방이 가득 차서 다음 방을 보고 있어요`);
-            found = await joinRoom(`${NET.quickRoomPrefix}-${n}`, undefined, abort.signal);
+            found = await joinRoom(`${NET.quickRoomPrefix}-${n}`, undefined, NET.discover.quickWaitMs, abort.signal);
           }
           if (!found) throw new FriendlyError('빠른 대전 방이 모두 가득 찼어요 😢 잠시 후 다시 시도하거나 방을 만들어 보세요.');
           transport = found.transport;
@@ -271,7 +287,7 @@ function start(ctx: RenderContext): void {
           roomCode = choice.kind === 'create' ? makeRoomCode() : choice.code;
           if (choice.kind === 'create') mode = choice.mode;
           connecting.show(choice.kind === 'create' ? `방 ${roomCode} 만드는 중…` : `방 ${roomCode} 에 들어가는 중…`, choice.kind === 'create' ? '만들고 나면 초대 링크를 복사할 수 있어요' : '친구들을 찾고 있어요');
-          const joined = await joinRoom(`room-${roomCode}`, roomCode, abort.signal);
+          const joined = await joinRoom(`room-${roomCode}`, roomCode, choice.kind === 'create' ? 0 : NET.discover.joinWaitMs, abort.signal);
           if (!joined) throw new FriendlyError(`방 ${roomCode} 이 가득 찼어요 (최대 ${MATCH.maxPlayers}명). 다른 방을 만들어 보세요.`);
           transport = joined.transport;
           warning = joined.warning;
@@ -306,6 +322,7 @@ function start(ctx: RenderContext): void {
     const g = new Game(ctx, input, sfx, hud, assets!, map!, { transport, roomLabel, roomCode, mode, botFill, profile });
     game = g;
     g.on('notice', (text) => hud.toast(text));
+    g.on('roomFull', () => void onRoomFull(choice, roomLabel));
     hud.setInvite(roomCode);
     sfx.setScene('game');
     g.setInputEnabled(input.locked);
@@ -318,6 +335,18 @@ function start(ctx: RenderContext): void {
     else if (choice.kind === 'join' && transport.peers().length === 0) hud.toast('아직 아무도 없어요. 친구에게 방 코드를 알려 주세요!', 5);
     else if (choice.kind === 'quick' && transport.peers().length === 0) hud.toast('지금은 봇들과 먼저 놀아요. 누가 들어오면 알려 줄게요!', 5);
     if (warning) hud.toast('온라인 연결이 불안정해요 — 친구가 못 들어올 수도 있어요', 5);
+  }
+
+  /** 입장 뒤 정원 초과로 밀려남: 빠른 대전은 다음 방으로, 친구 방은 메뉴로 */
+  async function onRoomFull(choice: PlayChoice, roomLabel: string): Promise<void> {
+    await leave();
+    if (choice.kind === 'quick') {
+      const current = Number(/#(\d+)/.exec(roomLabel)?.[1] ?? '1');
+      nextQuickRoom = Math.min(NET.quickRoomCount, current + 1);
+      void play({ kind: 'quick' });
+    } else {
+      menu.setStatus(`방이 가득 찼어요 (최대 ${MATCH.maxPlayers}명). 다른 방을 만들어 보세요.`, 'error');
+    }
   }
 
   async function leave(): Promise<void> {

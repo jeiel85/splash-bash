@@ -41,6 +41,8 @@ export interface GameOptions {
 interface GameEvents {
   /** 네트워크 경고 등 사용자에게 알릴 메시지 */
   notice: (text: string) => void;
+  /** 정원(사람 MATCH.maxPlayers)을 넘었고 내가 가장 늦게 온 쪽이라 나가야 함 */
+  roomFull: () => void;
 }
 
 /** 개발·테스트용 조작 훅(DEV 빌드 또는 ?debug) */
@@ -100,6 +102,7 @@ export class Game extends Emitter<GameEvents> {
   private readonly rnd = mulberry32((Math.random() * 1e9) | 0);
   private readonly disposers: Array<() => void> = [];
   private myColor = '';
+  private roomFullEmitted = false;
 
   constructor(
     private readonly ctx: RenderContext,
@@ -221,6 +224,23 @@ export class Game extends Emitter<GameEvents> {
       this.session.sendBotInfos([...this.bots.values()].map((b) => b.info), info.id);
       this.adjustBots();
     }
+    this.checkCapacity();
+  }
+
+  /**
+   * 정원 초과 처리: 방 탐색은 일부만 보고 판단하므로 입장 뒤에도 확인한다.
+   * 모든 피어가 같은 (joinedAt, id) 순서로 판단하므로 늦게 온 사람만 나간다.
+   */
+  private checkCapacity(): void {
+    if (this.roomFullEmitted || !this.session.online) return;
+    const humans = this.session.players().filter((p) => !p.isBot);
+    if (humans.length <= MATCH.maxPlayers) return;
+    humans.sort((a, b) => a.joinedAt - b.joinedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const rank = humans.findIndex((p) => p.id === this.session.selfId);
+    if (rank >= MATCH.maxPlayers) {
+      this.roomFullEmitted = true;
+      this.emit('roomFull');
+    }
   }
 
   private onPlayerLeft(id: PeerId): void {
@@ -252,7 +272,8 @@ export class Game extends Emitter<GameEvents> {
       if (!r) {
         this.remotes.set(info.id, new RemoteActor(info, this.makeAvatar(info)));
       } else if (r.info.name !== info.name || r.info.cosmetics.color !== info.cosmetics.color || r.info.cosmetics.hat !== info.cosmetics.hat) {
-        // 같은 id 의 다른 봇(호스트가 둘이었다가 합쳐진 경우): 모습을 바꾸고 이전 봇의 위치 기록은 버린다
+        // 같은 id 인데 모습이 다른 봇(봇 id 는 호스트별이라 드물지만, 합쳐진 두 호스트의 id 앞자리가 겹친 경우 등):
+        // 모습을 바꾸고 이전 봇의 위치 기록은 버린다
         r.info = info;
         r.buffer.clear();
         this.refreshAvatar(r);
@@ -333,10 +354,14 @@ export class Game extends Emitter<GameEvents> {
     const want = this.opts.botFill ? Math.max(0, MATCH.botFillTo - this.humanCount()) : 0;
     let changed = false;
     while (this.bots.size < want) {
-      // 이어받은 봇(이전 호스트가 만든 bot-N)과 id 가 겹치지 않게
+      // 봇 id 는 호스트마다 다르게(bot-<내 id 앞 4자>-N): 따로 시작한 두 호스트가 합쳐질 때 진 쪽 봇과 이긴 쪽 봇이
+      // 같은 id 로 섞이지 않는다(진 쪽 손님 화면의 봇 교체, 사라진 봇을 향한 명중이 엉뚱한 봇에 가는 일 방지).
+      // 이름은 이어받은 봇(이전 호스트가 만든 봇)과 겹치지 않게 고른다
+      const names = new Set([...this.bots.values()].map((b) => b.info.name));
+      const prefix = `bot-${this.session.selfId.slice(0, 4)}-`;
       let n = this.botSeq++;
-      while (this.bots.has(`bot-${n}`) || this.remotes.has(`bot-${n}`)) n = this.botSeq++;
-      const id = `bot-${n}`;
+      while (names.has(botName(n)) || this.bots.has(prefix + n)) n = this.botSeq++;
+      const id = prefix + n;
       const info: PlayerInfo = {
         id, name: botName(n), isBot: true, joinedAt: 0,
         cosmetics: { color: Math.floor(this.rnd() * PLAYER_COLORS.length), hat: HAT_IDS[1 + Math.floor(this.rnd() * (HAT_IDS.length - 1))] },
@@ -578,7 +603,7 @@ export class Game extends Emitter<GameEvents> {
       out.push({ pos, team, alive });
     };
     add(this.session.selfId, this.body.position, this.vit.alive);
-    for (const r of this.remotes.values()) if (r.hasData) add(r.info.id, r.pos, r.alive);
+    for (const r of this.remotes.values()) if (this.shown(r)) add(r.info.id, r.pos, r.alive);
     for (const b of this.bots.values()) add(b.info.id, b.body.position, b.vitality.alive);
     return out;
   }
@@ -691,7 +716,7 @@ export class Game extends Emitter<GameEvents> {
     const renderT = now - NET.interpDelayMs;
     for (const r of this.remotes.values()) {
       r.sample(renderT);
-      if (!r.hasData) {
+      if (!this.shown(r)) {
         r.avatar.root.visible = false;
         continue;
       }
@@ -733,6 +758,15 @@ export class Game extends Emitter<GameEvents> {
 
   private presentIds(): PeerId[] {
     return [this.session.selfId, ...[...this.remotes.values()].filter((r) => !r.info.isBot).map((r) => r.info.id), ...this.bots.keys()];
+  }
+
+  /**
+   * 화면에 보이고 맞을 수 있는 원격: 스냅샷을 받았고, 오래 말이 없는 사람이 아님.
+   * 탭이 강제로 닫힌 사람은 전송 계층이 10초 넘게 지나서야 떠났다고 알리는데, 그동안 멈춘 유령으로 서서
+   * 명중 표시만 뜨고 쓰러지지 않는 일을 막는다(다시 말하면 곧바로 돌아온다).
+   */
+  private shown(r: RemoteActor): boolean {
+    return r.hasData && !this.session.isSilent(r.info.id);
   }
 
   private checkJumpPads(body: PlayerBody, dt: number, isLocal: boolean): void {
@@ -799,7 +833,7 @@ export class Game extends Emitter<GameEvents> {
     const percepts: BotPercept[] = [];
     percepts.push({ id: this.session.selfId, team: this.teamOf(this.session.selfId), pos: this.body.position, vel: this.body.velocity, alive: this.vit.alive, shielded: this.vit.shielded });
     for (const r of this.remotes.values()) {
-      if (r.hasData) percepts.push({ id: r.info.id, team: this.teamOf(r.info.id), pos: r.pos, vel: r.vel, alive: r.alive, shielded: r.shielded });
+      if (this.shown(r)) percepts.push({ id: r.info.id, team: this.teamOf(r.info.id), pos: r.pos, vel: r.vel, alive: r.alive, shielded: r.shielded });
     }
     for (const b of this.bots.values()) {
       percepts.push({ id: b.info.id, team: this.teamOf(b.info.id), pos: b.body.position, vel: b.body.velocity, alive: b.vitality.alive, shielded: b.vitality.shielded });
@@ -850,7 +884,7 @@ export class Game extends Emitter<GameEvents> {
     t.length = 0;
     t.push({ id: this.session.selfId, team: this.teamOf(this.session.selfId), alive: this.vit.alive, shielded: this.vit.shielded, pos: this.body.position });
     for (const r of this.remotes.values()) {
-      if (r.hasData) t.push({ id: r.info.id, team: this.teamOf(r.info.id), alive: r.alive, shielded: r.shielded, pos: r.pos });
+      if (this.shown(r)) t.push({ id: r.info.id, team: this.teamOf(r.info.id), alive: r.alive, shielded: r.shielded, pos: r.pos });
     }
     for (const b of this.bots.values()) {
       t.push({ id: b.info.id, team: this.teamOf(b.info.id), alive: b.vitality.alive, shielded: b.vitality.shielded, pos: b.body.position });
@@ -979,7 +1013,7 @@ export class Game extends Emitter<GameEvents> {
         shielded: this.vit.shielded,
         tank: this.arsenal.tank,
         weapon: this.arsenal.current,
-        remotes: [...this.remotes.values()].map((r) => ({ id: r.info.id, name: r.info.name, bot: r.info.isBot, hasData: r.hasData, pos: r.pos.toArray(), alive: r.alive, soak: r.soak, shielded: r.shielded })),
+        remotes: [...this.remotes.values()].map((r) => ({ id: r.info.id, name: r.info.name, bot: r.info.isBot, hasData: r.hasData, visible: this.shown(r), pos: r.pos.toArray(), alive: r.alive, soak: r.soak, shielded: r.shielded })),
         bots: [...this.bots.values()].map((b) => ({ id: b.info.id, name: b.info.name, pos: b.body.position.toArray(), alive: b.vitality.alive, soak: b.vitality.soak })),
         match: this.matchHost?.snapshot() ?? this.matchView.state,
         /** 지금 기준 남은 경기 시간(비호스트는 받은 시각부터 흐른 시간을 뺀 값) */

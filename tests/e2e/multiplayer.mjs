@@ -12,8 +12,16 @@
  * 환경 변수
  *   BASE_URL      이미 떠 있는 개발 서버를 쓰려면 주소(예: http://127.0.0.1:5317). 없으면 자체 서버
  *   E2E_MAP       맵(기본 test = 코드 시험장. 'backyard' 면 실제 맵)
- *   E2E_SUITES    실행할 묶음(쉼표): nobots,bots,merge (기본 전부)
+ *   E2E_SUITES    실행할 묶음(쉼표): nobots,bots,merge,tdm (기본 전부)
  *   E2E_HEADED=1  브라우저 창 보이기
+ *
+ * 묶음
+ *   nobots  사람 2→3명: 연결·호스트 합의, 위치 동기화, 전투·점수, 늦은 참가자, 호스트 정상 종료 → 이전
+ *   bots    봇 채우기: 비호스트가 호스트 봇을 봄·적셔 쓰러뜨림, 호스트 탭 강제 종료 → 새 호스트가 봇을 이어받음
+ *           (전송 계층이 떠남을 알리기 전에도 멈춘 호스트는 숨김·조준 불가)
+ *   merge   두 호스트 합치기: A 의 릴레이 연결을 늦춰 혼자 호스트로 시작시키고, 그사이 B(호스트)·C 가 따로 한 판 →
+ *           A 연결 → 모두 먼저 온 A 로 합쳐지고 B·C 는 B 의 봇을 버림. 이어서 두 명 동시 입장
+ *   tdm     팀전: 팀 배정 합의, 팀 점수, 호스트 이전 뒤 팀 유지
  *
  * 실패하면 종료 코드 1, 실패 시점 스크린샷·상태는 test-results/e2e/ 에 남긴다.
  */
@@ -25,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 let BASE = process.env.BASE_URL?.replace(/\/$/, '') ?? null;
 const MAP = process.env.E2E_MAP ?? 'test';
-const SUITES = (process.env.E2E_SUITES ?? 'nobots,bots,merge').split(',').map((s) => s.trim()).filter(Boolean);
+const SUITES = (process.env.E2E_SUITES ?? 'nobots,bots,merge,tdm').split(',').map((s) => s.trim()).filter(Boolean);
 const OUT_DIR = 'test-results/e2e';
 const PROFILE_KEY = 'splash-bash:profile:v1';
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -77,20 +85,71 @@ async function waitUntil(desc, timeoutMs, fn, intervalMs = 250) {
 
 // ------------------------------------------------------------------ player
 
+/**
+ * 시그널링 릴레이(wss://) 연결을 window.__openRelays() 를 부를 때까지 미루는 WebSocket 대리자(페이지 안에서 실행).
+ * 두 호스트 합치기 시험용: 이 플레이어는 방 탐색 동안 아무도 못 찾아 혼자 호스트로 시작하고, 나중에 연결되어 합쳐진다.
+ * Trystero 가 쓰는 부분(on* 처리기, readyState, send, close, url)만 흉내 낸다.
+ */
+function gateRelaySockets() {
+  const Real = window.WebSocket;
+  let release;
+  const gate = new Promise((r) => (release = r));
+  window.__openRelays = () => release();
+  class GatedWebSocket {
+    constructor(url, protocols) {
+      this.url = String(url);
+      this.onopen = this.onmessage = this.onclose = this.onerror = null;
+      this.binaryType = 'blob';
+      this.ws = null;
+      this.closedEarly = false;
+      gate.then(() => {
+        if (this.closedEarly) return;
+        const ws = new Real(url, protocols);
+        ws.binaryType = this.binaryType;
+        this.ws = ws;
+        for (const type of ['open', 'message', 'close', 'error']) {
+          ws.addEventListener(type, (e) => this[`on${type}`]?.call(this, e));
+        }
+      });
+    }
+    get readyState() {
+      return this.ws ? this.ws.readyState : this.closedEarly ? Real.CLOSED : Real.CONNECTING;
+    }
+    send(data) {
+      if (!this.ws) throw new DOMException('아직 연결 전', 'InvalidStateError');
+      this.ws.send(data);
+    }
+    close(code, reason) {
+      if (this.ws) this.ws.close(code, reason);
+      else this.closedEarly = true;
+    }
+  }
+  for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) GatedWebSocket[k] = Real[k];
+  window.WebSocket = new Proxy(Real, {
+    construct(target, args) {
+      return /^wss:/i.test(String(args[0])) ? new GatedWebSocket(...args) : Reflect.construct(target, args);
+    },
+  });
+}
+
 class Player {
-  /** @param {import('playwright').Browser} browser */
-  static async open(browser, label, code, { bots }) {
+  /**
+   * @param {import('playwright').Browser} browser
+   * @param {{ bots: boolean, mode?: 'ffa' | 'tdm', gateRelays?: boolean }} opts
+   */
+  static async open(browser, label, code, { bots, mode = 'ffa', gateRelays = false }) {
     const context = await browser.newContext({ viewport: { width: 480, height: 270 } });
-    await context.addInitScript(([key, name]) => {
+    await context.addInitScript(([key, name, m]) => {
       try {
         localStorage.setItem(key, JSON.stringify({
-          name, cosmetics: { color: 0, hat: 'none' }, mode: 'ffa',
+          name, cosmetics: { color: 0, hat: 'none' }, mode: m,
           settings: { sensitivity: 1, volume: 0, fov: 80, quality: 'low', invertY: false },
         }));
       } catch (e) {
         console.error('profile init failed', e);
       }
-    }, [PROFILE_KEY, label]);
+    }, [PROFILE_KEY, label, mode]);
+    if (gateRelays) await context.addInitScript(gateRelaySockets);
     const page = await context.newPage();
     const p = new Player(label, context, page);
     const params = new URLSearchParams();
@@ -125,14 +184,15 @@ class Player {
     });
   }
 
-  /** 메뉴의 "참가" 버튼(해시로 받은 방 코드) → 게임 시작까지 */
+  /** 메뉴의 초대 카드 "참가" 버튼(URL #room= 코드) → 방 탐색(NET.discoverMs) → 게임 시작까지 */
   async join() {
     const started = Date.now();
-    await this.page.locator('button.btn', { hasText: /^참가$/ }).click();
+    await this.page.locator('.menu-invite button.btn', { hasText: /^참가$/ }).click({ timeout: T.join });
+    const clicked = Date.now();
     await this.page.waitForFunction(() => !!window.__splash, null, { timeout: T.join });
     const s = await this.state();
     this.id = s.selfId;
-    log(`${this.label} 게임 입장 (${Date.now() - started}ms) selfId=${this.id.slice(0, 8)}`);
+    log(`${this.label} 게임 입장 (클릭 ${clicked - started}ms + 방 탐색·시작 ${Date.now() - clicked}ms) selfId=${this.id.slice(0, 8)} 피어 ${s.peers.length}명`);
     return started;
   }
 
@@ -193,6 +253,38 @@ async function waitMesh(players, timeoutMs) {
 async function scoresOf(p) {
   const s = await p.state();
   return s?.match?.scores ?? {};
+}
+
+/** 두 사람을 시험장 가운데에 6m 떨어뜨려 세우고, 피해자 보호막이 풀리고 쏘는 쪽이 새 위치를 볼 때까지 */
+async function faceOff(shooter, victim) {
+  await shooter.call('teleport', 0, 0.05, 3);
+  await victim.call('teleport', 0, 0.05, -3);
+  await waitUntil(`${victim.label} 보호막 해제 + ${shooter.label} 가 ${victim.label} 새 위치를 봄`, T.sync, async () => {
+    const [s, v] = await Promise.all([shooter.state(), victim.state()]);
+    const r = remoteOf(s, victim.id);
+    return { ok: !v.shielded && v.alive && r && !r.shielded && dist(r.pos, v.pos) < 0.3, info: { shielded: v.shielded, seen: r?.pos, own: v.pos } };
+  }, 100);
+}
+
+/** 조준 사격을 계속해 피해자를 쓰러뜨리고, 쏜 쪽 화면에서도 쓰러진 모습을 확인 */
+async function fireUntilDown(shooter, victim) {
+  await shooter.call('setIntent', { fire: true });
+  let down;
+  try {
+    down = await waitUntil(`${victim.label} 흠뻑(쓰러짐)`, T.combat, async () => {
+      await shooter.call('aimAt', victim.id);
+      const v = await victim.state();
+      return { ok: !v.alive, info: { soak: v.soak, alive: v.alive } };
+    }, 100);
+  } finally {
+    await shooter.call('setIntent', null);
+  }
+  // 쓰러짐은 피해자 스냅샷으로도 전해진다(부활까지 3초 — 그 안에 쏜 쪽 화면에서 쓰러진 모습)
+  const seenDown = await waitUntil(`${shooter.label} 화면에서 ${victim.label} 가 쓰러짐`, 2500, async () => {
+    const r = remoteOf(await shooter.state(), victim.id);
+    return { ok: r && !r.alive, info: r };
+  }, 50);
+  return { down, seenDown };
 }
 
 // ------------------------------------------------------------------ runner
@@ -278,38 +370,28 @@ async function suiteNoBots(browser) {
     });
 
     await step('전투: A 가 B 를 조준 사격 → B 젖음 → 흠뻑(쓰러짐) → 모든 피어 점수 일치', async () => {
-      await A.call('teleport', 0, 0.05, 3);
-      await B.call('teleport', 0, 0.05, -3);
-      // B 가 보호막이 풀리고, A 가 B 의 새 위치를 볼 때까지
-      await waitUntil('B 보호막 해제 + A 가 B 새 위치를 봄', T.sync, async () => {
-        const [a, b] = await Promise.all([A.state(), B.state()]);
-        const r = remoteOf(a, B.id);
-        return { ok: !b.shielded && b.alive && r && !r.shielded && dist(r.pos, b.pos) < 0.3, info: { bShield: b.shielded, seen: r?.pos, own: b.pos } };
-      }, 100);
+      await faceOff(A, B);
       assert(await A.call('aimAt', B.id), 'A.aimAt(B) 실패 — A 가 B 를 대상 목록에서 못 찾음');
+      // 첫 명중까지만 쏜다(고정 시간 연사는 느린 소프트웨어 렌더링 환경에서 프레임이 안 돌아 한 발도 안 나갈 수 있다)
       await A.call('setIntent', { fire: true });
-      await sleep(150);
-      await A.call('setIntent', null);
-      const hit = await waitUntil('짧은 사격 후 B 의 젖음 증가', T.combat, async () => {
-        const b = await B.state();
-        return { ok: b.soak > 0 || !b.alive, info: { soak: b.soak, alive: b.alive } };
-      }, 50);
+      let hit;
+      try {
+        hit = await waitUntil('사격 → B 의 젖음 증가', T.combat, async () => {
+          const [a, b] = await Promise.all([A.state(), B.state()]);
+          return { ok: b.soak > 0 || !b.alive, info: { soak: b.soak, alive: b.alive, aTank: a.tank, aDroplets: a.droplets } };
+        }, 30);
+      } finally {
+        await A.call('setIntent', null);
+      }
       const soakAfterBurst = hit.value.info.soak;
       // 계속 쏴서 흠뻑
-      await A.call('setIntent', { fire: true });
-      const down = await waitUntil('B 흠뻑(쓰러짐)', T.combat, async () => {
-        await A.call('aimAt', B.id);
-        const b = await B.state();
-        return { ok: !b.alive, info: { soak: b.soak, alive: b.alive } };
-      }, 100);
-      await A.call('setIntent', null);
+      const { down, seenDown } = await fireUntilDown(A, B);
       const agree = await waitUntil('모든 피어의 경기 점수 일치(A 1킬, B 1데스)', T.sync, async () => {
         const all = await Promise.all([A, B].map(scoresOf));
         const ok = all.every((sc) => sc[A.id]?.splashes === 1 && sc[B.id]?.soaked === 1 && (sc[A.id]?.soaked ?? 0) === 0);
         return { ok, info: all.map((sc) => ({ A: sc[A.id], B: sc[B.id] })) };
       });
-      const bRemoteOnA = remoteOf(await A.state(), B.id);
-      return `짧은 사격 뒤 B 젖음 ${soakAfterBurst.toFixed(0)}, 흠뻑까지 ${down.ms}ms, 점수 일치 ${agree.ms}ms, A 가 본 B alive=${bRemoteOnA?.alive}`;
+      return `첫 명중 ${hit.ms}ms(B 젖음 ${soakAfterBurst.toFixed(0)}), 흠뻑까지 ${down.ms}ms, A 화면 반영 +${seenDown.ms}ms, 점수 일치 ${agree.ms}ms`;
     });
 
     await step('늦게 온 C: 경기 상태 수신·모두 보임', async () => {
@@ -404,6 +486,51 @@ async function botsMoveOn(watcher) {
   return `${watcher.label} 가 본 봇 ${moved.length}/${ids.length} 이동`;
 }
 
+/**
+ * 비호스트 shooter 가 호스트의 봇 하나를 쫓아가 적셔 쓰러뜨린다.
+ * 명중 판정은 쏜 사람 쪽(shooter 화면의 봇 위치)이고, 봇의 젖음·쓰러짐은 호스트가 hit 메시지를 받아 처리한다.
+ */
+async function splashBotAsNonHost(host, shooter) {
+  const before = (await scoresOf(host))[shooter.id]?.splashes ?? 0;
+  let targetId = null;
+  await shooter.call('setIntent', { fire: true });
+  try {
+    return await waitUntil(`${shooter.label}(비호스트)가 봇을 쓰러뜨려 호스트 점수에 반영`, 45_000, async () => {
+      const [h, s] = await Promise.all([host.state(), shooter.state()]);
+      const bots = s.remotes.filter((r) => r.bot && r.hasData);
+      let target = bots.find((r) => r.id === targetId && r.alive);
+      if (!target) {
+        target = bots.find((r) => r.alive && !r.shielded);
+        targetId = target?.id ?? null;
+      }
+      if (s.alive && target) {
+        // 시험장 가운데 쪽으로 2.5m 떨어진 곳에서 조준(벽·상자에 덜 끼게)
+        if (dist(s.pos, target.pos) > 4.5) {
+          const [x, y, z] = target.pos;
+          const len = Math.hypot(x, z);
+          const k = len > 1 ? 2.5 / len : 0;
+          await shooter.call('teleport', x - x * k + (len > 1 ? 0 : 2.5), y + 0.05, z - z * k);
+        }
+        await shooter.call('aimAt', target.id);
+      }
+      const hostBot = h.bots.find((b) => b.id === targetId);
+      const splashes = h.match?.scores?.[shooter.id]?.splashes ?? 0;
+      return { ok: splashes > before, info: { target: targetId, hostSoak: hostBot?.soak, splashes, shooterAlive: s.alive } };
+    }, 60);
+  } finally {
+    await shooter.call('setIntent', null);
+  }
+}
+
+/** 모든 피어의 경기 점수표가 같아질 때까지(봇끼리 싸우는 중이라 잠깐씩 다를 수 있다) */
+function waitScoresAgree(players) {
+  return waitUntil(`${players.map((p) => p.label).join('·')} 경기 점수 일치`, T.sync, async () => {
+    const st = await Promise.all(players.map((p) => p.state()));
+    const keys = st.map((s) => JSON.stringify(Object.entries(s.match?.scores ?? {}).sort()));
+    return { ok: new Set(keys).size === 1 && st.every((s) => s.match?.hostId === st[0].hostId), info: keys };
+  }, 100);
+}
+
 async function suiteBots(browser) {
   await suite('봇 있음', browser, async (ctx, step) => {
     let A, B, C;
@@ -428,6 +555,12 @@ async function suiteBots(browser) {
       const agree = await waitBotsAgree([A, B], BOT_FILL_TO - 2);
       const moving = await botsMoveOn(B);
       return `연결 ${connectMs}ms, 봇 목록 일치 ${agree.ms}ms, ${moving}`;
+    });
+
+    await step('B(비호스트)가 호스트의 봇을 적셔 쓰러뜨림 → 호스트 점수 반영, 모두 일치', async () => {
+      const kill = await splashBotAsNonHost(A, B);
+      const agree = await waitScoresAgree([A, B]);
+      return `봇 쓰러뜨림 ${kill.ms}ms (봇 ${kill.value.info.target}), 점수 일치 ${agree.ms}ms`;
     });
 
     await step('C 입장 → 봇 3마리, 모두 같은 봇 목록', async () => {
@@ -463,10 +596,15 @@ async function suiteBots(browser) {
       const elapsed = Date.now() - closedAt;
       assert(hostState.timerMs <= timerBefore + 1500 && hostState.timerMs >= timerBefore - elapsed - 3000,
         `타이머가 이어지지 않음: ${timerBefore} → ${hostState.timerMs} (경과 ${elapsed}ms)`);
+      // 전송 계층이 떠남을 알리기 전(아직 원격 목록에 있음)에도 멈춘 A 는 보이지 않고 맞지 않아야 한다(유령 방지)
+      const ghost = value.states.map((s) => remoteOf(s, A.id)).filter(Boolean);
+      assert(ghost.every((r) => !r.visible), `떠난 A 가 아직 보임: ${JSON.stringify(ghost)}`);
+      const aimGhost = await Promise.all([B, C].map((p) => p.call('aimAt', A.id)));
+      assert(aimGhost.every((ok) => !ok), '떠난 A 가 아직 조준·명중 대상에 있음');
       const agree = await waitBotsAgree([B, C], BOT_FILL_TO - 2);
       const moving = await botsMoveOn(other);
       const hostMoving = await botsMoveOn(newHost);
-      return `새 호스트=${newHost.label}, 합의 ${ms}ms, 이어받은 봇 ${kept.length}마리, 봇 목록 일치 ${agree.ms}ms, ${moving}, ${hostMoving}`;
+      return `새 호스트=${newHost.label}, 합의 ${ms}ms, 떠난 A 는 원격 목록에 ${ghost.length ? '남았지만 숨김·조준 불가' : '없음'}, 이어받은 봇 ${kept.length}마리, 봇 목록 일치 ${agree.ms}ms, ${moving}, ${hostMoving}`;
     });
   });
 }
@@ -474,7 +612,62 @@ async function suiteBots(browser) {
 // ------------------------------------------------------------------ suite 3: 두 호스트 합치기
 
 async function suiteMerge(browser) {
-  await suite('동시 입장(호스트 합치기)', browser, async (ctx, step) => {
+  await suite('두 호스트 합치기', browser, async (ctx, step) => {
+    let A, B, C;
+
+    await step('A 는 릴레이 연결이 늦어 혼자 호스트 + 봇 5마리', async () => {
+      A = await ctx.open('A', { bots: true, gateRelays: true });
+      await A.join();
+      await waitUntil('A 가 호스트로 봇 5마리 생성', T.sync, async () => {
+        const s = await A.state();
+        return { ok: s.isHost && s.bots.length === BOT_FILL_TO - 1, info: { isHost: s.isHost, bots: s.bots.length } };
+      });
+    });
+
+    await step('그동안 B·C 가 들어와 따로 한 판(B 호스트, 봇 4마리)', async () => {
+      B = await ctx.open('B', { bots: true });
+      await B.join();
+      C = await ctx.open('C', { bots: true });
+      await C.join();
+      const mesh = await waitMesh([B, C], T.connect);
+      assert(mesh.value.states[0].hostId === B.id, `B 가 호스트여야 함(호스트=${mesh.value.states[0].hostId?.slice(0, 8)})`);
+      const agree = await waitBotsAgree([B, C], BOT_FILL_TO - 2);
+      const [a, b] = await Promise.all([A.state(), B.state()]);
+      assert(a.isHost && a.remotes.length === 0, 'A 가 그사이 누군가와 연결됨(릴레이 지연이 안 먹힘)');
+      const shared = b.bots.filter((x) => a.bots.some((y) => y.id === x.id)).map((x) => x.id);
+      assert(shared.length === 0, `두 호스트의 봇 id 가 겹침(봇 id 는 호스트별이어야 함): ${shared}`);
+      return `B·C 봇 목록 일치 ${agree.ms}ms, A 봇 ${a.bots.map((x) => x.id).join(',')} / B 봇 ${b.bots.map((x) => x.id).join(',')}`;
+    });
+
+    await step('A 릴레이 연결 → 먼저 들어온 A 로 합쳐짐: B 는 자기 봇을, C 는 B 의 봇을 버리고 모두 A 의 봇·경기 상태', async () => {
+      const bOld = new Set((await B.state()).bots.map((x) => x.id));
+      const released = Date.now();
+      await A.page.evaluate(() => window.__openRelays());
+      const mesh = await waitMesh([A, B, C], T.connect);
+      const connectMs = Date.now() - released;
+      assert(mesh.value.states[0].hostId === A.id, `먼저 들어온 A 가 호스트여야 함(호스트=${mesh.value.states[0].hostId?.slice(0, 8)})`);
+      const agree = await waitBotsAgree([A, B, C], BOT_FILL_TO - 3);
+      const [a, b, c] = await Promise.all([A.state(), B.state(), C.state()]);
+      assert(b.bots.length === 0, `B 가 자기 봇을 버리지 않음: ${b.bots.map((x) => x.id)}`);
+      const aIds = a.bots.map((x) => x.id).sort();
+      for (const [p, s] of [[B, b], [C, c]]) {
+        const seen = s.remotes.filter((r) => r.bot).map((r) => r.id).sort();
+        assert(JSON.stringify(seen) === JSON.stringify(aIds), `${p.label} 가 보는 봇 ${seen} ≠ A 의 봇 ${aIds}`);
+        assert(!seen.some((id) => bOld.has(id)), `${p.label} 화면에 B 의 옛 봇이 남음`);
+      }
+      const scores = await waitScoresAgree([A, B, C]);
+      const cs = (await C.state()).match;
+      assert(cs.hostId === A.id, `C 의 경기 상태가 A 것이 아님(hostId=${cs.hostId?.slice(0, 8)})`);
+      const ids = Object.keys(cs.scores).sort();
+      const expected = [A.id, B.id, C.id, ...aIds].sort();
+      assert(JSON.stringify(ids) === JSON.stringify(expected), `점수표 참가자가 틀림: ${ids} ≠ ${expected}`);
+      const movingB = await botsMoveOn(B);
+      const movingC = await botsMoveOn(C);
+      return `릴레이 연결→3명 합의 ${connectMs}ms, 봇 목록 일치 ${agree.ms}ms, 점수 일치 ${scores.ms}ms, ${movingB}, ${movingC}`;
+    });
+  });
+
+  await suite('동시 입장', browser, async (ctx, step) => {
     let A, B;
     await step('봇 켠 두 명이 동시에 입장 → 한 호스트로 합쳐지고 진 쪽은 자기 봇을 버리고 이긴 쪽 봇을 봄', async () => {
       [A, B] = await Promise.all([ctx.open('A', { bots: true }), ctx.open('B', { bots: true })]);
@@ -494,6 +687,85 @@ async function suiteMerge(browser) {
       const other = host === A ? B : A;
       const moving = await botsMoveOn(other);
       return `연결 ${connectMs}ms (합의 대기 ${mesh.ms}ms), 두 호스트 합치기 ${bothHosted ? '발생' : '안 일어남(탐색 중 서로 발견)'}, 호스트=${host.label}, 봇 목록 일치 ${agree.ms}ms, ${moving}`;
+    });
+  });
+}
+
+// ------------------------------------------------------------------ suite 4: 팀전
+
+/** 경기 상태의 팀 배정 { id: team } (JSON, id 정렬) */
+const teamsOf = (s) => JSON.stringify(Object.fromEntries(Object.entries(s.match?.scores ?? {}).map(([id, l]) => [id, l.team]).sort()));
+
+function waitTeamsAgree(players) {
+  return waitUntil(`${players.map((p) => p.label).join('·')} 팀 배정 일치`, T.sync, async () => {
+    const st = await Promise.all(players.map((p) => p.state()));
+    const teams = st.map(teamsOf);
+    const assigned = Object.values(JSON.parse(teams[0]));
+    const ok = new Set(teams).size === 1 && st.every((s) => s.match?.mode === 'tdm')
+      && assigned.length === players.length && assigned.every((t) => t === 0 || t === 1);
+    return { ok, teams: JSON.parse(teams[0]), info: teams };
+  });
+}
+
+async function suiteTdm(browser) {
+  await suite('팀전', browser, async (ctx, step) => {
+    let A, B, C;
+    let teams;
+
+    await step('두 명 팀전 입장 → 서로 다른 팀, 모든 피어 팀 배정 일치', async () => {
+      [A, B] = await Promise.all([ctx.open('A', { bots: false, mode: 'tdm' }), ctx.open('B', { bots: false, mode: 'tdm' })]);
+      await Promise.all([A.join(), B.join()]);
+      await waitMesh([A, B], T.connect);
+      const agree = await waitTeamsAgree([A, B]);
+      teams = agree.value.teams;
+      assert(teams[A.id] !== teams[B.id], `두 명이 같은 팀: ${JSON.stringify(teams)}`);
+      return `A=${teams[A.id]}팀, B=${teams[B.id]}팀`;
+    });
+
+    await step('A 가 B 를 쓰러뜨림 → A 팀 점수 1, 모든 피어 일치', async () => {
+      await faceOff(A, B);
+      await fireUntilDown(A, B);
+      const agree = await waitUntil('팀 점수 일치', T.sync, async () => {
+        const st = await Promise.all([A.state(), B.state()]);
+        const ts = st.map((s) => s.match?.teamScores ?? []);
+        const ok = ts.every((t) => t[teams[A.id]] === 1 && t[teams[B.id]] === 0);
+        return { ok, info: ts };
+      });
+      return `팀 점수 일치 ${agree.ms}ms`;
+    });
+
+    await step('C 입장 → 인원이 적은 팀에 배정, 모두 일치', async () => {
+      C = await ctx.open('C', { bots: false, mode: 'tdm' });
+      await C.join();
+      await waitMesh([A, B, C], T.connect);
+      const agree = await waitTeamsAgree([A, B, C]);
+      teams = agree.value.teams;
+      const counts = [0, 0];
+      for (const t of Object.values(teams)) counts[t]++;
+      assert(Math.abs(counts[0] - counts[1]) === 1, `팀 인원이 치우침: ${counts}`);
+      return `C=${teams[C.id]}팀, 인원 ${counts.join(':')}`;
+    });
+
+    await step('호스트 정상 종료 → 새 호스트가 팀·팀 점수를 그대로 이어받음', async () => {
+      const hostState = await A.state();
+      const host = [A, B, C].find((p) => p.id === hostState.hostId);
+      const scoresBefore = hostState.match.teamScores;
+      await host.close({ graceful: true });
+      const remaining = [A, B, C].filter((p) => !p.closed);
+      await waitUntil('남은 피어가 같은 새 호스트에 합의', T.migrate, async () => {
+        const st = await Promise.all(remaining.map((p) => p.state()));
+        const ok = new Set(st.map((s) => s.hostId)).size === 1 && st[0].hostId !== host.id && st.filter((s) => s.isHost).length === 1
+          && st.every((s) => s.match?.hostId === st[0].hostId);
+        return { ok, info: st.map((s) => [s.hostId?.slice(0, 8), s.match?.hostId?.slice(0, 8)]) };
+      });
+      // 떠난 호스트의 점수 줄은 전송 계층이 떠남을 알릴 때(정상 종료 신호가 못 가면 10초+) 빠지므로 남은 사람만 비교
+      const agree = await waitUntil('남은 피어의 팀 배정·팀 점수가 그대로이고 모두 일치', T.sync, async () => {
+        const st = await Promise.all(remaining.map((p) => p.state()));
+        const view = st.map((s) => JSON.stringify([remaining.map((p) => s.match?.scores?.[p.id]?.team), s.match?.teamScores]));
+        const expected = JSON.stringify([remaining.map((p) => teams[p.id]), scoresBefore]);
+        return { ok: view.every((v) => v === expected), info: { expected, view } };
+      });
+      return `떠난 호스트=${host.label}, 팀·팀 점수(${scoresBefore.join(':')}) 유지 확인 ${agree.ms}ms`;
     });
   });
 }
@@ -523,6 +795,7 @@ try {
   if (SUITES.includes('nobots')) await suiteNoBots(browser);
   if (SUITES.includes('bots')) await suiteBots(browser);
   if (SUITES.includes('merge')) await suiteMerge(browser);
+  if (SUITES.includes('tdm')) await suiteTdm(browser);
 } catch (e) {
   results.push({ suite: '(실행)', title: '하네스', status: 'FAIL', error: e.message ?? String(e) });
   console.error(e);

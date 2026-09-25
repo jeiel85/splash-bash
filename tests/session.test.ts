@@ -445,6 +445,24 @@ describe('Session — 말 없는 호스트(탭 강제 종료) 감지', () => {
     expect(sessions.c.hostId).toBe('c');
   });
 
+  it('isSilent: 조용한 사람만 true(게임이 유령을 숨김), 다시 말하거나 떠나면 false', () => {
+    const { hub, sessions } = room({ a: 1, b: 2, c: 3 });
+    advance(hub, sessions, NET.hostSilenceMs - 500, ['a', 'c']);
+    expect(sessions.a.isSilent('b')).toBe(false);
+    advance(hub, sessions, 1000, ['a', 'c']);
+    expect(sessions.a.isSilent('b')).toBe(true);
+    expect(sessions.c.isSilent('b')).toBe(true);
+    expect(sessions.a.isSilent('c')).toBe(false);
+    expect(sessions.a.isSilent('a')).toBe(false);
+    advance(hub, sessions, 100, ['a', 'b', 'c']);
+    expect(sessions.a.isSilent('b')).toBe(false);
+    advance(hub, sessions, NET.hostSilenceMs + 500, ['a', 'c']);
+    expect(sessions.a.isSilent('b')).toBe(true);
+    hub.remove('b');
+    expect(sessions.a.isSilent('b')).toBe(false);
+    expect(sessions.a.info('b')).toBeUndefined();
+  });
+
   it('내 쪽 루프가 멈췄다 깨어난 경우(탭 얼림)는 남 탓으로 호스트를 바꾸지 않는다', () => {
     const { hub, sessions } = room({ a: 1, b: 2 });
     advance(hub, sessions, 500, ['a', 'b']);

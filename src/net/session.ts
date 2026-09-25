@@ -119,6 +119,14 @@ export class Session extends Emitter<SessionEvents> {
     return this.infos.get(id);
   }
 
+  /**
+   * NET.hostSilenceMs 넘게 아무 말이 없는 사람인지. 탭이 강제로 닫히면 전송 계층이 떠남을 10초 넘게 늦게 알리므로,
+   * 게임은 그동안 이 사람을 보이지 않게·맞지 않게 둔다(멈춘 유령에게 명중 표시가 뜨지 않도록). 다시 말하면 false.
+   */
+  isSilent(id: PeerId): boolean {
+    return this.silent.has(id);
+  }
+
   peerCount(): number {
     return this.transport.peers().length;
   }
