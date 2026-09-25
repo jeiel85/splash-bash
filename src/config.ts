@@ -158,6 +158,157 @@ export const JUMPPAD = {
   cooldown: 0.5,
 } as const;
 
+/**
+ * 봇(호스트 AI) 튜닝. 근거: docs/research/design-synthesis.md §12.
+ * 사람과 같은 물리·무기 코드를 쓰므로 여기 값은 "판단·조준·이동 습관"만 정한다.
+ */
+export const BOT = {
+  /** 판단 주기(초) — 5Hz. 봇마다 시작 위상을 흩어 같은 프레임에 몰리지 않게 */
+  thinkInterval: 0.2,
+  /** 이동 속도 배율(사람 6 m/s → 5.4 m/s), 슬라이드 안 씀 */
+  speedScale: 0.9,
+  /** 시야: 전체 각(도)·거리(m). 시야선 레이는 판단 때만 쏜다 */
+  fovDeg: 110,
+  sightRange: 30,
+  /** "듣기": 이 거리 안에서 쏜 적은 시야 밖이어도 알아챈다 */
+  hearRange: 12,
+  /** 발사 소리를 들은 것으로 치는 시간(초) */
+  hearMemory: 0.6,
+  /** 맞으면 쏜 사람을 이 시간(초) 동안 "들은" 것으로 본다 */
+  hitMemory: 1.5,
+  /** 새로 본 대상에게 첫 발까지 반응 지연(초, 균등) */
+  reactionMin: 0.4,
+  reactionMax: 0.7,
+  /** 잠깐 놓쳤던 같은 대상을 다시 볼 때 반응 지연(초) */
+  reacquireDelay: 0.15,
+  /** 시야에서 사라진 대상을 붙잡고 쫓는 시간(초) */
+  targetMemory: 1.5,
+  /** 대상을 잡은 뒤 이 시간(초) 동안은 더 나은 대상이 보여도 바꾸지 않는다(맞으면 예외) */
+  retargetHold: 1.5,
+  /** 바꿀 때 필요한 점수 차(m 환산) */
+  retargetMargin: 3,
+  /** 대상 점수(거리 m 기준 가감): 나를 맞힌 사람·현재 대상·보호막·다른 봇이 노리는 수 */
+  scoreAttacker: 8,
+  scoreCurrent: 4,
+  scoreShielded: 20,
+  scorePerClaim: 5,
+  /** 다른 대상이 있으면 한 대상을 노리는 봇은 이 수까지 */
+  maxPerTarget: 2,
+  /**
+   * 조준 오차 σ(도): 처음 aimSigmaStart → 계속 추적하면 aimTrackTime 초 뒤 aimSigmaEnd.
+   * 종합안 §12 는 4° → 2° 이지만 헤드리스 연습 모드 시뮬레이션(사람 1 + 봇 5, 240초 × 16판, tests/botSim.ts)에서
+   * 캐주얼 대역(σ 6°→3.5°, 반응 0.55~0.9초)이 4°→2° 봇에게 0/16 승·K/D 0.78, 5°→3° 봇에게 2/16 승·K/D 1.02 —
+   * 연습 모드를 캐주얼 플레이어가 이길 수 있게 5° → 3° 로 둔다(봇끼리 실력은 같고, 반응·회전·발사 조건은 종합안 그대로)
+   */
+  aimSigmaStartDeg: 5,
+  aimSigmaEndDeg: 3,
+  aimTrackTime: 1.5,
+  /** 대상의 옆걸음 속도 1 m/s 당 σ 추가(도) */
+  aimSigmaPerLateralDeg: 1,
+  /** 세로 오차는 가로의 이 배율(세로 조준이 쉽다) */
+  aimPitchScale: 0.6,
+  /** 오차 목표를 다시 뽑는 간격(초)과 따라가는 속도(1/초) — 조준점이 대상 둘레를 천천히 떠돈다 */
+  aimJitterMin: 0.25,
+  aimJitterMax: 0.45,
+  aimJitterFollow: 6,
+  /** 봐주기: 연속으로 이만큼 흠뻑 젖고 한 번도 못 적신 사람에게 σ 추가(도) — 점수를 내면 해제 */
+  mercyStreak: 3,
+  mercySigmaDeg: 2,
+  /** 조준·시선 회전 한계(도/초) */
+  turnRateDeg: 200,
+  /** 오차가 이 각도(도) 안이거나 대상 몸통 안일 때만 쏜다 */
+  fireConeDeg: 6,
+  /** 물방울-몸 판정 반지름(m, STREAM.hitRadius + PLAYER.radius) — "몸통 안" 각도 계산용 */
+  bodyRadius: 0.55,
+  /** 반자동 무기를 누르는 간격 여유(초, 무기 간격 + 이만큼 균등) */
+  clickSlackMin: 0.04,
+  clickSlackMax: 0.14,
+  /** 무기별 선호 교전 거리(m) */
+  preferredRange: { pistol: 14, soaker: 8, bucket: 3 },
+  /** 기본 무기 비율(나머지는 권총) */
+  loadoutSoaker: 0.6,
+  loadoutBucket: 0.25,
+  /** 소커 봇 중 가까우면 양동이로 바꾸는 비율 */
+  adaptiveShare: 0.5,
+  /** 무기 바꾸기 거리(m): 양동이 → 소커, 소커 → 양동이/권총, 권총 → 소커 */
+  bucketOut: 7.5,
+  soakerToBucket: 3.2,
+  soakerToPistol: 16,
+  pistolToSoaker: 5,
+  /** 무기를 다시 바꾸기까지 최소 간격(초) */
+  switchHold: 1.2,
+  /** 교전 중 좌우 무빙 방향 유지 시간(초) */
+  strafeMin: 0.6,
+  strafeMax: 1.2,
+  /** 선호 거리에서 이만큼(m) 벗어나면 다가가거나 물러난다 */
+  rangeSlack: 2.5,
+  /** 교전 중 무작위 점프(초당 확률) */
+  jumpPerSec: 0.1,
+  /** 물 보충: 이 아래로 떨어지면 가서 이만큼 찰 때까지, 적이 이 거리 안이면 포기하고 싸운다 */
+  refillBelow: 25,
+  refillUntil: 90,
+  refillAbortDist: 8,
+  /** 수영장은 노출이 커서 경로 비용에 더하는 벌점(m) */
+  poolRefillPenalty: 4,
+  /** 후퇴: 내 젖음 ≥ retreatSoak, 대상 ≤ retreatTargetSoak 일 때 시야를 끊는 곳으로 최대 retreatTime 초 */
+  retreatSoak: 70,
+  retreatTargetSoak: 40,
+  retreatTime: 3,
+  retreatCooldown: 5,
+  /** 엄폐 노드 탐색 반경(m)·후보 수 */
+  coverRadius: 14,
+  coverCandidates: 8,
+  /** 물풍선: 대상 거리(m)·필요 물·봇별 쿨다운(초)·뭉침 판정 반경(m) */
+  balloonMin: 5,
+  balloonMax: 12,
+  balloonTank: 60,
+  balloonCooldown: 8,
+  clusterRadius: 3,
+  /** 던지기 조준을 맞추는 제한 시간(초)과 허용 오차(도) */
+  throwWindow: 0.8,
+  throwToleranceDeg: 3,
+  /** 배회 목표 가중치(노드 종류별) */
+  wanderTower: 2.5,
+  wanderFountain: 2,
+  wanderLane: 1.5,
+  wanderOther: 1,
+  wanderPatio: 0.6,
+  wanderPool: 0.5,
+  /** 막다른 노드 배율 */
+  wanderDeadEnd: 0.3,
+  /** 바깥 레인 판정: |z| ≥ 맵 절반 폭 × 이 비율. 가운데 레인은 수영장에서 이 거리(m) 안 */
+  laneOuterFrac: 0.5,
+  laneMiddleDist: 3.5,
+  /** 이보다 가까운 노드는 배회 목표로 고르지 않는다(m) */
+  wanderMinDist: 7,
+  /** 목표에 닿은 뒤 머무는 시간(초): 보통 / 전망대 */
+  lingerMin: 0.3,
+  lingerMax: 1.2,
+  towerLingerMin: 3,
+  towerLingerMax: 6,
+  /** 머무는 동안 둘러보는 회전 속도(도/초) */
+  scanRateDeg: 70,
+  /** 적이 안 보일 때 마지막으로 본·들은 곳으로 가 볼 확률 */
+  investigateChance: 0.5,
+  /** 점프대 비행 간선 비용(m 환산)과 경로마다 곱하는 무작위 범위 — 경사로와 번갈아 쓰게 */
+  padEdgeCost: 6,
+  padCostJitterMin: 0.5,
+  padCostJitterMax: 2,
+  /** 경로: 노드 도착 반경(m), 이 안이고 다음 노드로 곧장 걸어갈 수 있으면 건너뛴다 */
+  arriveRadius: 0.9,
+  cornerCutDist: 4,
+  /** 높은 노드가 이 거리(m) 안이고 0.6 m 이상 높으면 뛴다(맵 감사 스크립트와 같은 규칙) */
+  jumpUpDist: 3,
+  jumpUpHeight: 0.6,
+  /** 끼임: 0.5초마다 이동량이 이보다 작으면 끼인 시간 누적 → 점프 / 경로 재계산 / 목표 변경 */
+  stuckMove: 0.6,
+  stuckJump: 0.5,
+  stuckReplan: 1.0,
+  stuckNewGoal: 2.0,
+  /** 막힌 노드를 경로 시작점 후보에서 빼 두는 시간(초) */
+  blockedNodeTime: 3,
+} as const;
+
 export const MATCH = {
   durationSec: 240,
   ffaScoreLimit: 15,

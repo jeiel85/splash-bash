@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BALLOON, JUMPPAD, MATCH, NET, PLAYER, PLAYER_COLORS, TANK, TEAM_COLORS, WATER_TINT, WEAPONS } from '../config';
+import { BALLOON, BOT, JUMPPAD, MATCH, NET, PLAYER, PLAYER_COLORS, TANK, TEAM_COLORS, WATER_TINT, WEAPONS } from '../config';
 import { Emitter } from '../core/events';
 import { emptyIntent, type Input, type Intent } from '../core/input';
 import { mulberry32 } from '../core/rng';
@@ -16,7 +16,7 @@ import type { DamageSource, GameMode, MatchState, PeerId, PlayerInfo, TeamId } f
 import { isInWater, solvePadLaunch, type GameMap, type SpawnPoint } from '../world/map';
 import { Avatar } from './avatar';
 import { BotActor, RemoteActor, Vitality } from './actors';
-import { BotBrain, botName, type BotPercept } from './bots';
+import { BotBrain, BotDirector, botName, botShotDirection } from './bots';
 import { MatchHost, MatchView } from './match';
 import { PlayerBody } from './playerBody';
 import { ProjectileSystem, type HitTarget } from './projectiles';
@@ -75,6 +75,8 @@ export class Game extends Emitter<GameEvents> {
   private readonly vit = new Vitality();
   private readonly remotes = new Map<PeerId, RemoteActor>();
   private readonly bots = new Map<PeerId, BotActor>();
+  /** 봇 공용 상태(인지 목록·발사 소리·봐주기·대상 나눠 갖기) — 호스트일 때만 쓴다 */
+  private readonly botDirector = new BotDirector();
   private matchHost: MatchHost | null = null;
   private readonly matchView = new MatchView();
   private pendingShots: NetShot[] = [];
@@ -577,6 +579,7 @@ export class Game extends Emitter<GameEvents> {
     const clock = this.session.clock(from);
     for (const s of shots) {
       if (s.shooter === this.session.selfId || this.bots.has(s.shooter)) continue;
+      if (this.matchHost) this.botDirector.noteFire(s.shooter);
       const advance = clock.ready ? THREE.MathUtils.clamp((now - clock.toLocal(s.t)) / 1000, 0, 0.2) : 0;
       _origin.set(s.origin[0], s.origin[1], s.origin[2]);
       _aim.set(s.dir[0], s.dir[1], s.dir[2]);
@@ -791,6 +794,8 @@ export class Game extends Emitter<GameEvents> {
   private fireLocal(req: FireRequest): void {
     this.vit.breakShield();
     const self = this.session.selfId;
+    // 봇 "듣기"(호스트)
+    if (this.matchHost) this.botDirector.noteFire(self);
     this.ctx.camera.updateMatrixWorld();
     const eye = this.body.eyePosition(_v2);
     this.body.aimDirection(_aim);
@@ -830,21 +835,25 @@ export class Game extends Emitter<GameEvents> {
   }
 
   private updateBots(dt: number, playing: boolean): void {
-    const percepts: BotPercept[] = [];
-    percepts.push({ id: this.session.selfId, team: this.teamOf(this.session.selfId), pos: this.body.position, vel: this.body.velocity, alive: this.vit.alive, shielded: this.vit.shielded });
+    // 인지 목록(재사용 객체): 나, 보이는 원격, 봇. 봇은 지금 노리는 대상도 넘겨 대상 나눠 갖기에 쓴다
+    const dir = this.botDirector;
+    dir.begin(this.map, this.time);
+    const self = this.session.selfId;
+    dir.see(self, this.teamOf(self), this.body.position, this.body.velocity, this.vit.alive, this.vit.shielded, this.vit.soak, false);
     for (const r of this.remotes.values()) {
-      if (this.shown(r)) percepts.push({ id: r.info.id, team: this.teamOf(r.info.id), pos: r.pos, vel: r.vel, alive: r.alive, shielded: r.shielded });
+      if (this.shown(r)) dir.see(r.info.id, this.teamOf(r.info.id), r.pos, r.vel, r.alive, r.shielded, r.soak * PLAYER.maxSoak, r.info.isBot);
     }
     for (const b of this.bots.values()) {
-      percepts.push({ id: b.info.id, team: this.teamOf(b.info.id), pos: b.body.position, vel: b.body.velocity, alive: b.vitality.alive, shielded: b.vitality.shielded });
+      dir.see(b.info.id, this.teamOf(b.info.id), b.body.position, b.body.velocity, b.vitality.alive, b.vitality.shielded, b.vitality.soak, true, b.brain.targetId);
     }
+    // 봐주기 규칙(연속으로 젖기만 한 사람)은 점수로 판단 — 초당 2번
+    if (this.matchHost && dir.scoresDue(dt)) dir.syncScores(this.matchHost.snapshot().scores);
     for (const bot of this.bots.values()) {
       if (bot.vitality.tick(dt)) this.respawnBot(bot);
       if (bot.vitality.alive) {
-        const others = percepts.filter((p) => p.id !== bot.info.id);
-        const intent = bot.brain.think(dt, bot.body, bot.arsenal, { map: this.map, others, time: this.time });
+        const intent = bot.brain.think(dt, bot.body, bot.arsenal, dir.context(bot.info.id, bot.vitality.soak));
         const refill = this.refillRate(bot.body.position);
-        bot.body.speedScale = (refill.inWater ? PLAYER.waterSpeedScale : 1) * bot.arsenal.moveScale * 0.9;
+        bot.body.speedScale = (refill.inWater ? PLAYER.waterSpeedScale : 1) * bot.arsenal.moveScale * BOT.speedScale;
         bot.body.step(dt, intent);
         this.checkJumpPads(bot.body, dt, false);
         if (bot.body.position.y < this.map.bounds.killY) this.respawnBot(bot);
@@ -861,6 +870,7 @@ export class Game extends Emitter<GameEvents> {
   private fireBot(bot: BotActor, req: FireRequest): void {
     bot.vitality.breakShield();
     const id = bot.info.id;
+    this.botDirector.noteFire(id);
     bot.body.eyePosition(_v2);
     bot.body.aimDirection(_aim);
     bot.avatar.muzzleWorld(_origin);
@@ -874,8 +884,10 @@ export class Game extends Emitter<GameEvents> {
       this.sfx.play('throw', { pos: _origin });
       return;
     }
-    this.projectiles.fireGun(id, team, req.kind, _origin, _aim, req.seed, req.spread, true, _color);
-    this.pendingShots.push(this.shot(id, req.kind, req, _origin, _aim, null));
+    // 총구에서 봇 시선 위 조준점으로 모은다(총구가 눈보다 낮고 옆이라 나란히 쏘면 빗나감)
+    botShotDirection(_v2, _aim, _origin, bot.brain.aimRange, _v);
+    this.projectiles.fireGun(id, team, req.kind, _origin, _v, req.seed, req.spread, true, _color);
+    this.pendingShots.push(this.shot(id, req.kind, req, _origin, _v, null));
     this.sfx.play(req.kind, { pos: _origin, volume: 0.7 });
   }
 
