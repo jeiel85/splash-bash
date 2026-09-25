@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
+    "test:e2e": "node tests/e2e/multiplayer.mjs",
     "assets": "node tools/build-assets.mjs"
   },
   "dependencies": {

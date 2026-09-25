@@ -55,14 +55,24 @@ export class MatchHost {
     delete this.state.scores[id];
   }
 
-  /** 쓰러짐 반영. 경기 중이 아니면 무시 */
+  /** 지금 방에 있는 참가자만 남긴다(호스트를 이어받을 때, 받은 상태에 남아 있던 떠난 사람 정리) */
+  retain(presentIds: Iterable<PeerId>): void {
+    const present = new Set(presentIds);
+    for (const id of Object.keys(this.state.scores)) if (!present.has(id)) delete this.state.scores[id];
+  }
+
+  /**
+   * 쓰러짐 반영. 경기 중이 아니면 무시.
+   * 등록되지 않은 id(이미 떠난 사람·빠진 봇)는 점수 줄을 새로 만들지 않는다 — 떠난 사람이 던진 물풍선에 맞은 경우 등.
+   * 되살려 두면 팀전 인원 계산이 틀어지고 떠난 사람이 우승자로 뽑힐 수 있다.
+   */
   recordSplash(victim: PeerId, killer: PeerId): void {
     if (this.state.phase !== 'playing') return;
-    const v = this.addPlayer(victim);
-    v.soaked++;
-    if (killer !== victim) {
-      const k = this.addPlayer(killer);
-      const friendly = this.state.mode === 'tdm' && k.team === v.team;
+    const v = this.state.scores[victim];
+    if (v) v.soaked++;
+    const k = killer !== victim ? this.state.scores[killer] : undefined;
+    if (k) {
+      const friendly = this.state.mode === 'tdm' && !!v && k.team === v.team;
       if (!friendly) {
         k.splashes++;
         if (this.state.mode === 'tdm' && (k.team === 0 || k.team === 1)) this.state.teamScores[k.team]++;

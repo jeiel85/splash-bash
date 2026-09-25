@@ -26,6 +26,12 @@ const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const MAX_COORD = 1000;
+const TAU = Math.PI * 2;
+
+/** 임의의 유한 각도를 [-π, π) 로(거대한 값도 반복 없이) */
+export function wrapAngle(a: number): number {
+  return ((((a + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+}
 
 function str(v: unknown, max: number): string | null {
   return typeof v === 'string' && v.length > 0 && v.length <= max ? v : null;
@@ -90,7 +96,7 @@ export function decodeSnapshot(raw: unknown): PlayerSnapshot | null {
     t: a[0],
     px: a[1], py: a[2], pz: a[3],
     vx: clamp(a[4], -60, 60), vy: clamp(a[5], -60, 60), vz: clamp(a[6], -60, 60),
-    yaw: a[7], pitch: clamp(a[8], -Math.PI / 2, Math.PI / 2),
+    yaw: wrapAngle(a[7]), pitch: clamp(a[8], -Math.PI / 2, Math.PI / 2),
     weapon,
     soak: clamp(a[10] / 1000, 0, 1),
     tank: clamp(a[11] / 1000, 0, 1),
@@ -219,6 +225,7 @@ export function decodeSplash(raw: unknown): NetSplash | null {
   const killer = str(raw[1], 64);
   const source = SOURCES[raw[2] as number];
   if (!victim || !killer || !source || !raw.slice(2).every(isNum)) return null;
+  if (Math.abs(raw[3]) > MAX_COORD || Math.abs(raw[4]) > MAX_COORD || Math.abs(raw[5]) > MAX_COORD) return null;
   return { victim, killer, source, pos: [raw[3], raw[4], raw[5]] };
 }
 
@@ -239,7 +246,9 @@ export function decodeMatch(raw: unknown): MatchState | null {
   if (o.scores && typeof o.scores === 'object') {
     let n = 0;
     for (const [id, line] of Object.entries(o.scores as Record<string, unknown>)) {
-      if (++n > 32 || id.length > 64 || !line || typeof line !== 'object') continue;
+      if (++n > 32) break;
+      // '__proto__'·'constructor' 같은 키는 일반 객체 조회를 오염시킨다
+      if (id.length === 0 || id.length > 64 || id in Object.prototype || !line || typeof line !== 'object') continue;
       const l = line as Record<string, unknown>;
       if (!isNum(l.splashes) || !isNum(l.soaked)) continue;
       const team = (l.team === 0 || l.team === 1 ? l.team : -1) as TeamId;
@@ -252,7 +261,7 @@ export function decodeMatch(raw: unknown): MatchState | null {
     remainingMs: clamp(o.remainingMs, 0, 60 * 60 * 1000),
     round: Math.floor(o.round),
     scores,
-    teamScores: [ts[0], ts[1]],
+    teamScores: [Math.max(0, Math.floor(ts[0])), Math.max(0, Math.floor(ts[1]))],
     hostId: o.hostId as string,
     winner: typeof o.winner === 'string' ? o.winner.slice(0, 64) : undefined,
   };

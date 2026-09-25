@@ -33,10 +33,11 @@ export interface InterpState {
 const MAX_EXTRAPOLATE_MS = 200;
 const CAPACITY = 32;
 
-function lerpAngle(a: number, b: number, t: number): number {
-  let d = b - a;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
+const TAU = Math.PI * 2;
+
+/** 짧은 쪽으로 도는 각도 보간(값이 커도 반복 없이 계산) */
+export function lerpAngle(a: number, b: number, t: number): number {
+  const d = ((((b - a + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
   return a + d * t;
 }
 
