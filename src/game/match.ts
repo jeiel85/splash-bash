@@ -35,12 +35,53 @@ export function pickBotColor(usedColors: Iterable<number>, rnd: () => number): n
 }
 
 /**
+ * 사람이 들어와 봇을 하나 뺄 때 고를 봇(호스트).
+ * 팀전이면 인원이 많은 팀의 봇부터 뺀다 — 팀을 보지 않고 빼면 3:3 방에 들어온 사람이 0팀에 서고 1팀 봇이 빠져 4:2 가 됐다.
+ * 그 안에서는 점수가 가장 낮은 봇, 동점이면 먼저 넣은 봇. 인원이 많은 팀에 봇이 없으면 모든 봇에서 고른다.
+ * @returns botIds 가 비었으면 undefined
+ */
+export function pickBotToRemove(state: MatchStateView, botIds: Iterable<PeerId>): PeerId | undefined {
+  const scores = state.scores;
+  let bigTeam: TeamId = -1;
+  if (state.mode === 'tdm') {
+    let c0 = 0;
+    let c1 = 0;
+    for (const id in scores) {
+      const t = scores[id].team;
+      if (t === 0) c0++;
+      else if (t === 1) c1++;
+    }
+    if (c0 !== c1) bigTeam = c0 > c1 ? 0 : 1;
+  }
+  let best: PeerId | undefined;
+  let bestInBig = false;
+  let bestScore = Infinity;
+  for (const id of botIds) {
+    const line = scores[id];
+    const inBig = bigTeam !== -1 && line?.team === bigTeam;
+    const score = line?.splashes ?? 0;
+    if (best === undefined || (inBig && !bestInBig) || (inBig === bestInBig && score < bestScore)) {
+      best = id;
+      bestInBig = inBig;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/**
  * 경기 규칙(호스트 전용): 시간, 점수, 팀 배정, 결과 화면, 다음 경기.
  * 호스트가 바뀌면 새 호스트가 마지막으로 받은 MatchState 로 이어서 만든다(fromState).
  */
 export class MatchHost {
   private state: MatchState;
   private remaining: number;
+  /**
+   * 이번 경기 중에 떠난 사람의 점수 줄(팀 포함). 전송 계층은 5초 넘게 끊긴 피어를 떠난 것으로 치고 같은 id 로 다시 붙이므로,
+   * 같은 경기 안에 돌아오면 점수와 팀을 되살린다. 점수판(state.scores)에는 없으므로 우승 후보·팀 인원 계산에서 빠진다.
+   * 호스트 로컬 기록이라 방송하지 않고, 다음 경기로 넘어가면 비운다
+   */
+  private readonly departed = new Map<PeerId, ScoreLine>();
 
   constructor(mode: GameMode, hostId: PeerId) {
     this.state = {
@@ -74,29 +115,63 @@ export class MatchHost {
     return Object.hasOwn(this.state.scores, id);
   }
 
-  /** 참가자 등록(이미 있으면 유지). 팀전이면 인원이 적은 팀에 배정 */
-  addPlayer(id: PeerId): ScoreLine {
-    let line = this.state.scores[id];
-    if (line) return line;
+  /**
+   * 참가자 등록(이미 있으면 유지). 이번 경기 중에 떠났다가 다시 붙은 사람은 떠날 때의 점수·팀을 되살린다.
+   * 새 사람은 팀전이면 인원이 적은 팀에 배정. 인원이 같으면 0팀인데, 0팀에 봇이 없고 1팀에 있으면 1팀 —
+   * 사람이 들어오면 호스트가 봇을 하나 빼므로(pickBotToRemove) 들어간 팀에 자리를 내줄 봇이 있어야 인원이 맞는다
+   * @param bots 지금 봇인 id(사람을 등록할 때 넘긴다)
+   */
+  addPlayer(id: PeerId, bots?: { has(id: PeerId): boolean }): ScoreLine {
+    const existing = this.state.scores[id];
+    if (existing) return existing;
+    const back = this.departed.get(id);
+    if (back) {
+      this.departed.delete(id);
+      this.state.scores[id] = back;
+      return back;
+    }
     let team: TeamId = -1;
     if (this.state.mode === 'tdm') {
       const counts = [0, 0];
-      for (const l of Object.values(this.state.scores)) if (l.team === 0 || l.team === 1) counts[l.team]++;
-      team = counts[0] <= counts[1] ? 0 : 1;
+      const botCounts = [0, 0];
+      for (const pid in this.state.scores) {
+        const t = this.state.scores[pid].team;
+        if (t !== 0 && t !== 1) continue;
+        counts[t]++;
+        if (bots?.has(pid)) botCounts[t]++;
+      }
+      if (counts[0] !== counts[1]) team = counts[0] < counts[1] ? 0 : 1;
+      else team = botCounts[0] === 0 && botCounts[1] > 0 ? 1 : 0;
     }
-    line = { splashes: 0, soaked: 0, team };
+    const line: ScoreLine = { splashes: 0, soaked: 0, team };
     this.state.scores[id] = line;
     return line;
   }
 
+  /** 다시 올 일이 없는 참가자(뺀 봇 등)의 점수 줄 삭제 */
   removePlayer(id: PeerId): void {
     delete this.state.scores[id];
+    this.departed.delete(id);
   }
 
-  /** 지금 방에 있는 참가자만 남긴다(호스트를 이어받을 때, 받은 상태에 남아 있던 떠난 사람 정리) */
+  /**
+   * 사람이 떠남(연결 끊김 포함): 점수판·우승 후보·팀 인원에서는 바로 빼고, 이번 경기가 끝날 때까지 줄을 보관한다.
+   * 같은 id 로 다시 붙으면 addPlayer 가 되살린다
+   */
+  leavePlayer(id: PeerId): void {
+    const line = this.state.scores[id];
+    if (!line) return;
+    delete this.state.scores[id];
+    this.departed.set(id, line);
+  }
+
+  /**
+   * 지금 방에 있는 참가자만 남긴다(호스트를 이어받을 때, 받은 상태에 남아 있던 떠난 사람 정리).
+   * 뺀 사람은 떠난 것으로 보관한다 — 끊겼던 이전 호스트가 이번 경기 안에 다시 붙으면 점수·팀을 되살린다
+   */
   retain(presentIds: Iterable<PeerId>): void {
     const present = new Set(presentIds);
-    for (const id of Object.keys(this.state.scores)) if (!present.has(id)) delete this.state.scores[id];
+    for (const id of Object.keys(this.state.scores)) if (!present.has(id)) this.leavePlayer(id);
   }
 
   /**
@@ -184,6 +259,8 @@ export class MatchHost {
     this.state.winner = undefined;
     this.state.teamScores = [0, 0];
     this.state.scores = {};
+    // 지난 경기에 떠난 사람의 줄은 버린다(새 경기는 점수가 0부터라 되살릴 것이 없고, 돌아오면 새 사람처럼 팀을 맞춘다)
+    this.departed.clear();
     this.remaining = MATCH.durationSec * 1000;
     // 팀은 섞지 않고 유지(떠난 사람은 제외)
     for (const [id, line] of Object.entries(prev)) {

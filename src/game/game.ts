@@ -17,10 +17,11 @@ import { isInWater, solvePadLaunch, type GameMap, type SpawnPoint } from '../wor
 import { Avatar } from './avatar';
 import { BotActor, RemoteActor, Vitality } from './actors';
 import { BotBrain, BotDirector, botName, botShotDirection } from './bots';
-import { MatchHost, MatchView, nameTagColor, pickBotColor, playerColor, type MatchStateView } from './match';
+import { MatchHost, MatchView, nameTagColor, pickBotColor, pickBotToRemove, playerColor, type MatchStateView } from './match';
 import { PlayerBody } from './playerBody';
 import { ProjectileSystem, type HitTarget } from './projectiles';
-import { pickSpawn, type SpawnThreat } from './spawns';
+import { needsTeamRespawn, pickSpawn, type SpawnThreat } from './spawns';
+import { balloonThrowOrigin } from './throwOrigin';
 import { ViewModel } from './viewmodel';
 import { Arsenal, type FireRequest } from './weapons';
 import { HAT_IDS } from '../types';
@@ -95,6 +96,9 @@ export class Game extends Emitter<GameEvents> {
   private deathPos = new THREE.Vector3();
   private deathT = 0;
   private lastSpawn: SpawnPoint | null = null;
+  /** 마지막 스폰에 쓴 내 팀과 그 시각(this.time) — 팀이 스폰 뒤에 정해지거나 바뀌면 우리 진영으로 옮길지 판단 */
+  private spawnTeam: TeamId = -1;
+  private spawnedAt = 0;
   private targets: HitTarget[] = [];
   private botSeq = 0;
   private botGrace: number;
@@ -214,7 +218,9 @@ export class Game extends Emitter<GameEvents> {
   private onPlayerInfo(info: PlayerInfo): void {
     // 호스트는 모습을 만들기 전에 경기에 등록해 팀부터 정한다(팀전에서 처음부터 팀 색으로 보이게)
     const newToMatch = !!this.matchHost && !this.matchHost.has(info.id);
-    this.matchHost?.addPlayer(info.id);
+    // 봇 목록을 넘겨 팀전 동률이면 자리를 내줄 봇이 있는 팀에 넣는다(이어서 adjustBots 가 그 팀 봇을 뺀다).
+    // 이번 경기 중에 끊겼다 다시 붙은 사람은 점수·팀을 되살린다
+    this.matchHost?.addPlayer(info.id, this.bots);
     let r = this.remotes.get(info.id);
     if (!r) {
       r = new RemoteActor(info, this.makeAvatar(info));
@@ -265,7 +271,9 @@ export class Game extends Emitter<GameEvents> {
     // 떠난 사람에게 보낼 명중은 받을 권한자가 없다
     this.pendingHits = this.pendingHits.filter((h) => h.victim !== id);
     if (this.matchHost) {
-      this.matchHost.removePlayer(id);
+      // 점수판에서는 빼되 이번 경기 동안 줄을 보관한다 — 전송 계층은 5초 넘게 끊긴 피어를 떠난 것으로 치고
+      // 같은 id 로 다시 붙이므로, 돌아오면 onPlayerInfo 의 addPlayer 가 점수·팀을 되살린다
+      this.matchHost.leavePlayer(id);
       this.adjustBots();
       this.broadcastMatch();
     }
@@ -311,6 +319,13 @@ export class Game extends Emitter<GameEvents> {
       for (const b of this.bots.values()) this.respawnBot(b);
       this.hud.centerMessage('새 경기 시작!', m.mode === 'tdm' ? '팀을 도와 적을 흠뻑 적셔요' : '모두를 흠뻑 적셔요', 2);
       this.sfx.play('spawn');
+    } else if (m.phase === 'playing' && this.vit.alive) {
+      // 같은 경기 안에서 내 팀이 스폰 뒤에 정해지거나 바뀜(손님은 진짜 호스트의 상태를 받기 전 임시 팀으로 먼저 스폰한다):
+      // 막 스폰했거나 상대 진영에 서 있으면 우리 진영으로 옮기고, 아니면 지금 팀을 받아들인다(다음 확인에서 끌어오지 않게).
+      // 쓰러져 있으면 다음 부활이 지금 팀으로 스폰한다
+      const team = this.teamOf(this.session.selfId);
+      if (needsTeamRespawn(this.map, m.mode, team, this.spawnTeam, this.time - this.spawnedAt, this.body.position)) this.respawnLocal();
+      else if (m.mode === 'tdm' && (team === 0 || team === 1)) this.spawnTeam = team;
     }
     if (m.phase === 'results' && this.lastPhase === 'playing') this.sfx.play('win');
     this.lastRound = m.round;
@@ -342,7 +357,7 @@ export class Game extends Emitter<GameEvents> {
       this.bots.set(id, bot);
       this.matchHost.addPlayer(id);
     }
-    // 받은 경기 상태에 남아 있던 떠난 사람(방금 나간 이전 호스트 등)은 점수판·우승 후보에서 뺀다
+    // 받은 경기 상태에 남아 있던 떠난 사람(방금 나간 이전 호스트 등)은 점수판·우승 후보에서 뺀다(이번 경기 안에 돌아오면 되살림)
     this.matchHost.retain([...this.session.players().map((p) => p.id), ...this.bots.keys()]);
     this.adjustBots();
     this.broadcastMatch();
@@ -354,6 +369,10 @@ export class Game extends Emitter<GameEvents> {
   }
 
   private loseHost(): void {
+    // 내가 마지막으로 진행한 경기 상태를 보기로 옮긴다. 그러지 않으면 새 호스트의 상태가 올 때까지(또는 그 전에 다시
+    // 호스트가 되면 이어받을 상태로) 손님이던 시절에 받은 오래된 상태를 쓴다 — 옛 결과 화면, 뒤로 가는 라운드.
+    // hostId 가 나라서 새 호스트의 상태는 라운드가 작아도 그대로 받아들여진다
+    if (this.matchHost) this.matchView.apply(this.matchHost.snapshot(), performance.now());
     this.matchHost = null;
     for (const b of this.bots.values()) b.avatar.dispose();
     this.bots.clear();
@@ -393,9 +412,8 @@ export class Game extends Emitter<GameEvents> {
       changed = true;
     }
     while (this.bots.size > want) {
-      // 점수가 가장 낮은 봇부터 뺀다
-      const scores = this.matchHost.view().scores;
-      const victim = [...this.bots.keys()].sort((a, b) => (scores[a]?.splashes ?? 0) - (scores[b]?.splashes ?? 0))[0];
+      // 팀전이면 인원이 많은 팀의 봇부터, 그 안에서 점수가 가장 낮은 봇부터 뺀다(사람이 들어와도 팀 인원 차 ≤ 1)
+      const victim = pickBotToRemove(this.matchHost.view(), this.bots.keys())!;
       this.bots.get(victim)!.avatar.dispose();
       this.bots.delete(victim);
       this.matchHost.removePlayer(victim);
@@ -530,8 +548,18 @@ export class Game extends Emitter<GameEvents> {
     }
   }
 
+  /**
+   * 팀전 같은 팀끼리의 명중인지. 쏜 쪽은 자기가 아는 팀으로 아군을 거르지만, 막 들어와 아직 팀을 모르는 손님이 쏜 물은
+   * 아군도 맞히므로 맞는 쪽(자기 몸의 권한자)이 다시 거른다
+   */
+  private isFriendlyHit(shooter: PeerId, victim: PeerId): boolean {
+    if (shooter === victim || this.mode() !== 'tdm') return false;
+    const team = this.teamOf(shooter);
+    return team !== -1 && team === this.teamOf(victim);
+  }
+
   private applyLocalHit(amount: number, shooter: PeerId, source: DamageSource, dir: THREE.Vector3): void {
-    if (this.phase() !== 'playing') return;
+    if (this.phase() !== 'playing' || this.isFriendlyHit(shooter, this.session.selfId)) return;
     const wasAlive = this.vit.alive;
     const died = this.vit.applyHit(amount, shooter, source);
     if (!wasAlive) return;
@@ -550,7 +578,7 @@ export class Game extends Emitter<GameEvents> {
   }
 
   private applyBotHit(bot: BotActor, amount: number, shooter: PeerId, source: DamageSource): void {
-    if (this.phase() !== 'playing') return;
+    if (this.phase() !== 'playing' || this.isFriendlyHit(shooter, bot.info.id)) return;
     bot.brain.lastAttacker = shooter;
     if (bot.vitality.applyHit(amount, shooter, source)) {
       const p = bot.body.position;
@@ -649,6 +677,8 @@ export class Game extends Emitter<GameEvents> {
     const team = this.teamOf(this.session.selfId);
     const sp = pickSpawn(this.map, team, this.threats(team, this.session.selfId), this.lastSpawn);
     this.lastSpawn = sp;
+    this.spawnTeam = team;
+    this.spawnedAt = this.time;
     this.body.teleport(sp.pos, sp.yaw);
     this.vit.spawn();
     this.arsenal.reset();
@@ -868,7 +898,8 @@ export class Game extends Emitter<GameEvents> {
     this.waterColor(self, _color);
     const team = this.teamOf(self);
     if (req.kind === 'balloon') {
-      _origin.copy(eye).addScaledVector(_aim, 0.5);
+      // 눈 앞 0.5 m 에서 놓되 벽 너머로 나가지 않게(벽에 붙어 던지면 벽 앞에서 터진다)
+      balloonThrowOrigin(this.map.collision, eye, _aim, _origin);
       this.projectiles.throwBalloon(self, team, _origin, _aim, this.body.velocity, true, _color);
       this.pendingShots.push(this.shot(self, 'balloon', req, _origin, _aim, this.body.velocity));
       this.sfx.play('throw');
@@ -934,7 +965,7 @@ export class Game extends Emitter<GameEvents> {
     this.waterColor(id, _color);
     const team = this.teamOf(id);
     if (req.kind === 'balloon') {
-      _origin.copy(_v2).addScaledVector(_aim, 0.5);
+      balloonThrowOrigin(this.map.collision, _v2, _aim, _origin);
       this.projectiles.throwBalloon(id, team, _origin, _aim, bot.body.velocity, true, _color);
       this.pendingShots.push(this.shot(id, 'balloon', req, _origin, _aim, bot.body.velocity));
       this.sfx.play('throw', { pos: _origin });
