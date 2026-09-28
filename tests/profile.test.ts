@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_SETTINGS, loadProfile, normalizeRoomCode, parseSettings, roomCodeFromHash, roomCodeHint, saveProfile } from '../src/ui/profile';
+import { PLAYER_COLORS } from '../src/config';
+import { HAT_IDS } from '../src/types';
+import { DEFAULT_SETTINGS, loadProfile, normalizeRoomCode, parseSettings, randomCosmetics, roomCodeFromHash, roomCodeHint, saveProfile } from '../src/ui/profile';
 
 describe('설정 불러오기(parseSettings)', () => {
   it('예전 저장본(음악·효과음·움직임 줄이기 없음)은 기존 값을 살리고 새 항목만 기본값', () => {
@@ -126,5 +128,42 @@ describe('프로필 불러오기(loadProfile) — 첫 방문 프로필 고정', 
     const p = loadProfile();
     expect(p.name.length).toBeGreaterThan(0);
     expect(setItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('캐릭터 랜덤(randomCosmetics)', () => {
+  const combos = PLAYER_COLORS.length * HAT_IDS.length;
+
+  it('어떤 난수가 나와도 지금과 다른, 유효한 조합을 고른다', () => {
+    const cur = { color: 3, hat: HAT_IDS[2] };
+    // 0 ≤ r < 1 전 구간을 촘촘히 훑는다(끝값 0.999999 포함)
+    for (let k = 0; k <= 1000; k++) {
+      const r = Math.min(k / 1000, 0.999999);
+      const c = randomCosmetics(cur, () => r);
+      expect(c.color).toBeGreaterThanOrEqual(0);
+      expect(c.color).toBeLessThan(PLAYER_COLORS.length);
+      expect(HAT_IDS).toContain(c.hat);
+      expect(c.color === cur.color && c.hat === cur.hat).toBe(false);
+    }
+  });
+
+  it('지금 조합을 뺀 나머지 전부가 고르게 나온다', () => {
+    const cur = { color: 0, hat: HAT_IDS[0] };
+    const seen = new Map<string, number>();
+    for (let i = 0; i < combos - 1; i++) {
+      const c = randomCosmetics(cur, () => (i + 0.5) / (combos - 1));
+      const k = `${c.color}/${c.hat}`;
+      seen.set(k, (seen.get(k) ?? 0) + 1);
+    }
+    expect(seen.size).toBe(combos - 1);
+    expect([...seen.values()].every((n) => n === 1)).toBe(true);
+    expect(seen.has(`0/${HAT_IDS[0]}`)).toBe(false);
+  });
+
+  it('원본 꾸미기를 고치지 않는다', () => {
+    const cur = { color: 7, hat: HAT_IDS[HAT_IDS.length - 1] };
+    const copy = { ...cur };
+    randomCosmetics(cur, () => 0.5);
+    expect(cur).toEqual(copy);
   });
 });

@@ -179,6 +179,10 @@ kbd {
   box-shadow: 0 0.38em 0 var(--ink), 0 1em 2.2em rgba(43, 29, 74, 0.22);
 }
 .card-title { font-size: 1.25em; margin-bottom: 0.35em; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5em; margin-bottom: 0.35em; }
+.card-head .card-title { margin-bottom: 0; }
+.chip.dice { flex: none; }
+.chip.dice:active { background: var(--lemon); }
 .menu-label { display: block; font-size: max(11px, 0.88em); color: var(--ink-soft); margin: 0.55em 0 0.3em; }
 .menu-input {
   font-family: var(--font);
@@ -257,6 +261,16 @@ kbd {
 }
 .menu-credits:hover { background: #fff; }
 .menu-credits:focus-visible { outline: 3px solid var(--water-deep); outline-offset: 2px; }
+.menu-visits {
+  font-size: max(11px, 0.8em);
+  color: var(--ink);
+  background: rgba(255, 252, 245, 0.8);
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  padding: 0.3em 0.9em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 
 @media (max-width: 900px), (max-aspect-ratio: 1/1) {
   .menu { background: linear-gradient(180deg, transparent 40%, rgba(255, 248, 236, 0.4)); }

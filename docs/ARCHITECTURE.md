@@ -15,7 +15,7 @@ index.html → src/main.ts (부팅·메뉴·방 참가·메인 루프)
                  │              ├ MatchHost(호스트: 시간·점수·팀) / MatchView(클라이언트)
                  │              └ Avatar(3인칭 캐릭터) · ViewModel(1인칭 무기)
                  ├─ net/      Transport(Trystero P2P / Offline) → Session(hello·호스트 선출·검증) · protocol(인코딩·검증) · interp(보간·시계)
-                 ├─ ui/       Menu · PauseMenu · Hud · MenuStage · icons(SVG) · profile(localStorage 설정)
+                 ├─ ui/       Menu · PauseMenu · Hud · MenuStage · icons(SVG) · profile(localStorage 설정) · visitCounter(방문자 수)
                  └─ audio/    Sfx(WebAudio 합성 효과음·먹먹함) · music(생성형 배경음악·앰비언스)
 ```
 
