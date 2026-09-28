@@ -11,6 +11,7 @@ import { Hud } from './ui/hud';
 import { ConnectingOverlay, Menu, PauseMenu, PlayPrompt, type PlayChoice } from './ui/menu';
 import { MenuStage } from './ui/menuStage';
 import { loadProfile, makeRoomCode, roomCodeFromHash, saveProfile, type Profile } from './ui/profile';
+import { fetchVisitCount } from './ui/visitCounter';
 import { OfflineTransport, TrysteroTransport, type Transport } from './net/transport';
 import type { GameMap } from './world/map';
 import { buildTestArena } from './world/testArena';
@@ -187,6 +188,8 @@ function start(ctx: RenderContext): void {
   applyUiScale();
   applySettings(profile);
   menu.setInvite(roomCodeFromHash(location.hash));
+  // 방문자 수는 장식이라 기다리지 않는다(실패·차단되면 칸이 숨은 채로 남는다)
+  void fetchVisitCount().then((n) => menu.setVisits(n));
 
   // 메뉴 레이아웃의 캐릭터 칸에 3D 캐릭터를 맞춘다
   const updateStageFrame = () => {

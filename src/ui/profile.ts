@@ -46,6 +46,22 @@ function randomName(): string {
   return `${ADJ[Math.floor(Math.random() * ADJ.length)]}${NOUN[Math.floor(Math.random() * NOUN.length)]}`;
 }
 
+/**
+ * 메뉴 "🎲 랜덤" 버튼: 색·모자를 무작위로 고른다.
+ * Input: 지금 꾸미기, 난수 함수(테스트에서 고정값을 넣으려고 주입받는다)
+ * Output: 새 꾸미기(원본은 고치지 않는다)
+ * 왜: 조합이 8색×7모자=56가지라 그냥 뽑으면 1/56 확률로 지금과 똑같아져 버튼이 고장 난 것처럼 보인다.
+ *     그래서 지금 조합을 뺀 55가지 중에서 한 번에 뽑는다(다시 뽑기 반복 없이 항상 1회 난수로 끝남).
+ */
+export function randomCosmetics(current: Cosmetics, rand: () => number = Math.random): Cosmetics {
+  const hats = HAT_IDS.length;
+  const total = PLAYER_COLORS.length * hats;
+  const cur = current.color * hats + Math.max(0, HAT_IDS.indexOf(current.hat));
+  let pick = Math.min(total - 2, Math.floor(rand() * (total - 1)));
+  if (pick >= cur) pick++;
+  return { color: Math.floor(pick / hats), hat: HAT_IDS[pick % hats] };
+}
+
 /** 운영체제의 "동작 줄이기" 설정을 처음 기본값으로 따른다 */
 function prefersReducedMotion(): boolean {
   try {

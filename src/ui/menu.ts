@@ -3,7 +3,8 @@ import type { SfxName } from '../audio/sfx';
 import { HAT_IDS, type GameMode, type HatId } from '../types';
 import { sanitizeName } from '../net/protocol';
 import type { LockFailure } from '../core/input';
-import { inviteLink, normalizeRoomCode, roomCodeHint, SETTING_RANGES, type Profile, type Settings } from './profile';
+import { inviteLink, normalizeRoomCode, randomCosmetics, roomCodeHint, SETTING_RANGES, type Profile, type Settings } from './profile';
+import { formatCount } from './visitCounter';
 
 export type PlayChoice =
   | { kind: 'quick' }
@@ -235,6 +236,7 @@ export class Menu {
   private readonly codeInput: HTMLInputElement;
   private readonly settingsModal: HTMLDivElement;
   private readonly settingsPanel: SettingsPanel;
+  private readonly visits: HTMLSpanElement;
   private invite: string | null = null;
 
   constructor(parent: HTMLElement, profile: Profile, private readonly h: MenuHandlers) {
@@ -258,7 +260,11 @@ export class Menu {
 
     // ---- 꾸미기
     const custom = el('section', 'menu-card menu-custom', grid);
-    el('div', 'card-title', custom, '내 캐릭터 꾸미기');
+    const customHead = el('div', 'card-head', custom);
+    el('div', 'card-title', customHead, '내 캐릭터 꾸미기');
+    const dice = el('button', 'chip dice', customHead, '🎲 랜덤');
+    dice.type = 'button';
+    dice.title = '색깔·모자를 무작위로 바꿔요';
     el('label', 'menu-label', custom, '닉네임').htmlFor = 'menu-name';
     const name = el('input', 'menu-input', custom);
     name.id = 'menu-name';
@@ -279,33 +285,48 @@ export class Menu {
 
     el('div', 'menu-label', custom, '색깔');
     const colors = el('div', 'menu-swatches', custom);
-    PLAYER_COLORS.forEach((c, i) => {
+    const colorBtns = PLAYER_COLORS.map((c, i) => {
       const b = el('button', 'swatch', colors);
       b.type = 'button';
       b.style.background = c;
       b.title = COLOR_NAMES[i] ?? `색 ${i + 1}`;
       b.setAttribute('aria-label', b.title);
-      b.classList.toggle('active', profile.cosmetics.color === i);
       b.addEventListener('click', () => {
         profile.cosmetics.color = i;
-        colors.querySelectorAll('.swatch').forEach((s, j) => s.classList.toggle('active', j === i));
+        paintCosmetics();
         this.h.sound('click');
         this.h.onProfile(profile);
       });
+      return b;
     });
 
     el('div', 'menu-label', custom, '모자');
     const hats = el('div', 'menu-hats', custom);
-    HAT_IDS.forEach((hat) => {
+    const hatBtns = HAT_IDS.map((hat) => {
       const b = el('button', 'chip', hats, HAT_LABEL[hat]);
       b.type = 'button';
-      b.classList.toggle('active', profile.cosmetics.hat === hat);
       b.addEventListener('click', () => {
         profile.cosmetics.hat = hat;
-        hats.querySelectorAll('.chip').forEach((s, j) => s.classList.toggle('active', HAT_IDS[j] === hat));
+        paintCosmetics();
         this.h.sound('click');
         this.h.onProfile(profile);
       });
+      return b;
+    });
+    // 색·모자 버튼과 🎲 랜덤이 같은 그리기 함수를 써서 선택 표시가 어긋나지 않게 한다
+    const paintCosmetics = () => {
+      colorBtns.forEach((b, i) => b.classList.toggle('active', profile.cosmetics.color === i));
+      hatBtns.forEach((b, i) => b.classList.toggle('active', profile.cosmetics.hat === HAT_IDS[i]));
+    };
+    paintCosmetics();
+    dice.addEventListener('click', () => {
+      profile.cosmetics = randomCosmetics(profile.cosmetics);
+      paintCosmetics();
+      this.h.sound('click');
+      this.h.onProfile(profile);
+      if (!document.documentElement.classList.contains('reduce-motion')) {
+        dice.animate([{ transform: 'rotate(0)' }, { transform: 'rotate(-18deg) scale(1.1)' }, { transform: 'rotate(14deg)' }, { transform: 'rotate(0)' }], { duration: 320 });
+      }
     });
 
     // ---- 캐릭터 자리(3D 무대가 비친다)
@@ -388,6 +409,9 @@ export class Menu {
     credits.href = 'third-party-licenses.txt';
     credits.target = '_blank';
     credits.rel = 'noopener';
+    // 방문자 수는 외부 카운터에서 늦게 오거나 못 올 수 있어 값이 생길 때까지 숨겨 둔다(setVisits)
+    this.visits = el('span', 'menu-visits hidden', foot);
+    this.visits.setAttribute('aria-live', 'polite');
     const gear = el('button', 'btn small ghost menu-gear', this.root, '⚙ 설정');
     gear.type = 'button';
     gear.addEventListener('click', () => this.openSettings(true));
@@ -436,6 +460,13 @@ export class Menu {
     this.quick.classList.toggle('primary', !code);
     this.quick.classList.toggle('secondary', !!code);
     if (code) this.codeInput.value = code;
+  }
+
+  /** 사이트 방문자 수(외부 카운터). null 이면 칸을 숨긴다 */
+  setVisits(n: number | null): void {
+    this.visits.textContent = n === null ? '' : `👀 방문 ${formatCount(n)}`;
+    this.visits.title = n === null ? '' : '이 사이트를 찾아온 방문 수(탭당 한 번 세요)';
+    this.visits.classList.toggle('hidden', n === null);
   }
 
   /** 상태·오류 문구. action 이 있으면 옆에 버튼(예: 새로고침)을 붙인다 */
