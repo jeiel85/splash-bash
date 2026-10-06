@@ -12,6 +12,7 @@ import { ConnectingOverlay, Menu, PauseMenu, PlayPrompt, type PlayChoice } from 
 import { MenuStage } from './ui/menuStage';
 import { loadProfile, makeRoomCode, roomCodeFromHash, saveProfile, type Profile } from './ui/profile';
 import { fetchVisitCount } from './ui/visitCounter';
+import { syncServerClock } from './net/serverClock';
 import { OfflineTransport, TrysteroTransport, type Transport } from './net/transport';
 import type { GameMap } from './world/map';
 import { buildTestArena } from './world/testArena';
@@ -291,6 +292,10 @@ function start(ctx: RenderContext): void {
         mode = choice.mode;
       } else {
         checkOnlineSupport();
+        // 입장 순서(joinedAt)를 서버 시각으로 맞춘다(#2). 입장할 때마다 새로 잰다(HEAD 한 번, 최대 3초).
+        // 방에 들어가기 전에 기다려야 취소돼도 나갈 방이 없다
+        await syncServerClock();
+        abort.signal.throwIfAborted();
         if (choice.kind === 'quick') {
           mode = 'ffa';
           let found: Joined | null = null;

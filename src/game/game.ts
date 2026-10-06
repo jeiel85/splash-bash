@@ -9,6 +9,7 @@ import type { GameAssets } from '../render/assets';
 import { Fx } from '../render/fx';
 import type { Hud, ScoreRow } from '../ui/hud';
 import type { Profile } from '../ui/profile';
+import { serverNow } from '../net/serverClock';
 import { Session } from '../net/session';
 import type { Transport } from '../net/transport';
 import type { NetHit, NetShot, NetSplash } from '../net/protocol';
@@ -123,7 +124,7 @@ export class Game extends Emitter<GameEvents> {
   ) {
     super();
     const selfInfo: PlayerInfo = {
-      id: '', name: opts.profile.name, cosmetics: { ...opts.profile.cosmetics }, isBot: false, joinedAt: Date.now(),
+      id: '', name: opts.profile.name, cosmetics: { ...opts.profile.cosmetics }, isBot: false, joinedAt: serverNow(),
     };
     this.session = new Session(opts.transport, selfInfo);
     this.botGrace = opts.transport.peers().length > 0 ? 2 : 0;

@@ -300,7 +300,8 @@ export class Session extends Emitter<SessionEvents> {
 
   /**
    * 호스트 = (joinedAt, id) 가 가장 작은 사람(오래 말이 없는 사람 제외). 모든 피어가 같은 정보로 같은 결론을 낸다.
-   * joinedAt 은 각자의 벽시계라서 시계가 크게 틀린 사람이 새로 들어오면 호스트를 가져갈 수 있다(알려진 한계).
+   * joinedAt 은 각자 보고하는 벽시계라서, 서버 시각으로 보정하지 못한(serverClock 실패) 기기의 시계가 크게 틀리면
+   * 새로 들어와서도 호스트를 가져갈 수 있다(알려진 한계, #2).
    */
   private electHost(): void {
     let best: PlayerInfo | null = null;
