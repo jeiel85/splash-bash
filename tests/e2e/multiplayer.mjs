@@ -12,7 +12,7 @@
  * 환경 변수
  *   BASE_URL      이미 떠 있는 개발 서버를 쓰려면 주소(예: http://127.0.0.1:5317). 없으면 자체 서버
  *   E2E_MAP       맵(기본 test = 코드 시험장. 'backyard' 면 실제 맵)
- *   E2E_SUITES    실행할 묶음(쉼표): nobots,bots,merge,tdm (기본 전부)
+ *   E2E_SUITES    실행할 묶음(쉼표): nobots,bots,merge,tdm,skew (기본 전부)
  *   E2E_HEADED=1  브라우저 창 보이기
  *
  * 묶음
@@ -22,6 +22,7 @@
  *   merge   두 호스트 합치기: A 의 릴레이 연결을 늦춰 혼자 호스트로 시작시키고, 그사이 B(호스트)·C 가 따로 한 판 →
  *           A 연결 → 모두 먼저 온 A 로 합쳐지고 B·C 는 B 의 봇을 버림. 이어서 두 명 동시 입장
  *   tdm     팀전: 팀 배정 합의, 팀 점수, 호스트 이전 뒤 팀 유지
+ *   skew    시계가 10분 늦은 C 가 진행 중인 방에 들어와도 호스트·경기가 그대로(#2)
  *
  * 실패하면 종료 코드 1, 실패 시점 스크린샷·상태는 test-results/e2e/ 에 남긴다.
  */
@@ -33,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 let BASE = process.env.BASE_URL?.replace(/\/$/, '') ?? null;
 const MAP = process.env.E2E_MAP ?? 'test';
-const SUITES = (process.env.E2E_SUITES ?? 'nobots,bots,merge,tdm').split(',').map((s) => s.trim()).filter(Boolean);
+const SUITES = (process.env.E2E_SUITES ?? 'nobots,bots,merge,tdm,skew').split(',').map((s) => s.trim()).filter(Boolean);
 const OUT_DIR = 'test-results/e2e';
 const PROFILE_KEY = 'splash-bash:profile:v1';
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -132,12 +133,26 @@ function gateRelaySockets() {
   });
 }
 
+/**
+ * 게임 코드(/src/)가 읽는 Date.now() 만 skewMs 만큼 어긋나게 한다(페이지 안에서 실행). 시계가 틀린 기기 흉내.
+ * Trystero 의 Nostr 시그널링(created_at·since)은 진짜 시각으로 둔다: 릴레이가 since 로 옛 이벤트를 거르면
+ * 시계가 크게 늦은 기기는 연결 자체가 안 되어 #2 상황(연결은 되는데 joinedAt 이 틀림)을 재현할 수 없기 때문.
+ * 바로 부른 쪽(스택 두 번째 프레임)이 /src/ 모듈일 때만 어긋난다.
+ */
+function skewGameClock(skewMs) {
+  const realNow = Date.now.bind(Date);
+  Date.now = function now() {
+    const caller = new Error().stack?.split('\n')[2] ?? '';
+    return realNow() + (/\/src\//.test(caller) ? skewMs : 0);
+  };
+}
+
 class Player {
   /**
    * @param {import('playwright').Browser} browser
-   * @param {{ bots: boolean, mode?: 'ffa' | 'tdm', gateRelays?: boolean }} opts
+   * @param {{ bots: boolean, mode?: 'ffa' | 'tdm', gateRelays?: boolean, clockSkewMs?: number }} opts
    */
-  static async open(browser, label, code, { bots, mode = 'ffa', gateRelays = false }) {
+  static async open(browser, label, code, { bots, mode = 'ffa', gateRelays = false, clockSkewMs = 0 }) {
     const context = await browser.newContext({ viewport: { width: 480, height: 270 } });
     await context.addInitScript(([key, name, m]) => {
       try {
@@ -150,6 +165,7 @@ class Player {
       }
     }, [PROFILE_KEY, label, mode]);
     if (gateRelays) await context.addInitScript(gateRelaySockets);
+    if (clockSkewMs) await context.addInitScript(skewGameClock, clockSkewMs);
     const page = await context.newPage();
     const p = new Player(label, context, page);
     const params = new URLSearchParams();
@@ -770,6 +786,61 @@ async function suiteTdm(browser) {
   });
 }
 
+// ------------------------------------------------------------------ suite 5: 시계가 틀린 참가자(#2)
+
+const SKEW_MS = -10 * 60_000;
+
+async function suiteSkew(browser) {
+  await suite('시계 오차', browser, async (ctx, step) => {
+    let A, B, C, host;
+    let before;
+
+    await step('A·B 접속 → 호스트 합의, 경기 진행', async () => {
+      [A, B] = await Promise.all([ctx.open('A', { bots: false }), ctx.open('B', { bots: false })]);
+      await Promise.all([A.join(), B.join()]);
+      const { value } = await waitMesh([A, B], T.connect);
+      host = [A, B].find((p) => p.id === value.states[0].hostId);
+      // 새 경기(240초)와 구분되도록 타이머가 충분히 흐른 뒤
+      await waitUntil('호스트 타이머가 10초 이상 흐름', T.sync, async () => {
+        const s = await host.state();
+        return { ok: s.timerMs < MATCH_DURATION_MS - 10_000, info: s.timerMs };
+      }, 500);
+      before = await host.state();
+      return `호스트=${host.label}, 남은 시간 ${(before.timerMs / 1000).toFixed(1)}s`;
+    });
+
+    await step('시계가 10분 늦은 C 입장 → 호스트·라운드·타이머 그대로, C 도 같은 경기 상태', async () => {
+      C = await ctx.open('C', { bots: false, clockSkewMs: SKEW_MS });
+      const offset = await C.page.evaluate(async () => {
+        const clock = await import('/src/net/serverClock.ts');
+        await clock.syncServerClock();
+        return clock.serverNow() - Date.now();
+      });
+      assert(Math.abs(offset) < 2000, `C 의 서버 시각 보정이 기기 시계 오차를 상쇄하지 못함: serverNow − 실제 = ${offset}ms`);
+      const joinedAt = Date.now();
+      await C.join();
+      await waitMesh([A, B, C], T.connect);
+      // 잠깐이라도 호스트가 바뀌면 경기가 초기화되므로 몇 초 동안 계속 지켜본다
+      const watchUntil = Date.now() + 5000;
+      let last;
+      while (Date.now() < watchUntil) {
+        const states = await Promise.all([A, B, C].map((p) => p.state()));
+        const hs = states.find((s) => s.isHost);
+        assert(states.every((s) => s.hostId === host.id) && hs?.selfId === host.id,
+          `호스트가 바뀜: ${JSON.stringify(states.map((s) => s.hostId?.slice(0, 8)))} (원래 ${host.id.slice(0, 8)})`);
+        assert(hs.match.round === before.match.round, `라운드가 바뀜: ${before.match.round} → ${hs.match.round}`);
+        assert(hs.timerMs <= before.timerMs, `타이머가 처음부터 다시 시작됨: ${before.timerMs}ms → ${hs.timerMs}ms`);
+        last = states;
+        await sleep(250);
+      }
+      const c = last[2];
+      assert(c.match?.round === before.match.round && Math.abs(c.timerMs - last.find((s) => s.isHost).timerMs) < 2500,
+        `C 의 경기 상태가 호스트와 다름: ${JSON.stringify({ c: c.match, cTimer: c.timerMs })}`);
+      return `C 보정 오차 ${offset}ms, 참가→연결 ${Date.now() - joinedAt - 5000}ms, 호스트=${host.label} 유지`;
+    });
+  });
+}
+
 // ------------------------------------------------------------------ main
 
 const headed = process.env.E2E_HEADED === '1';
@@ -796,6 +867,7 @@ try {
   if (SUITES.includes('bots')) await suiteBots(browser);
   if (SUITES.includes('merge')) await suiteMerge(browser);
   if (SUITES.includes('tdm')) await suiteTdm(browser);
+  if (SUITES.includes('skew')) await suiteSkew(browser);
 } catch (e) {
   results.push({ suite: '(실행)', title: '하네스', status: 'FAIL', error: e.message ?? String(e) });
   console.error(e);

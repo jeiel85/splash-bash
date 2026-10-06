@@ -12,6 +12,7 @@ import { ConnectingOverlay, Menu, PauseMenu, PlayPrompt, type PlayChoice } from 
 import { MenuStage } from './ui/menuStage';
 import { loadProfile, makeRoomCode, roomCodeFromHash, saveProfile, type Profile } from './ui/profile';
 import { fetchVisitCount } from './ui/visitCounter';
+import { syncServerClock } from './net/serverClock';
 import { OfflineTransport, TrysteroTransport, type Transport } from './net/transport';
 import type { GameMap } from './world/map';
 import { buildTestArena } from './world/testArena';
@@ -190,6 +191,8 @@ function start(ctx: RenderContext): void {
   menu.setInvite(roomCodeFromHash(location.hash));
   // 방문자 수는 장식이라 기다리지 않는다(실패·차단되면 칸이 숨은 채로 남는다)
   void fetchVisitCount().then((n) => menu.setVisits(n));
+  // 온라인 입장 순서(호스트 선출)를 기기 시계 오차와 무관하게 — 입장 전에 끝나 있도록 미리 잰다(#2)
+  void syncServerClock();
 
   // 메뉴 레이아웃의 캐릭터 칸에 3D 캐릭터를 맞춘다
   const updateStageFrame = () => {
@@ -291,6 +294,10 @@ function start(ctx: RenderContext): void {
         mode = choice.mode;
       } else {
         checkOnlineSupport();
+        // 입장 순서(joinedAt)를 서버 시각으로 맞춘다(#2). 보통 메뉴에 있는 동안 이미 끝났고, 아니면 최대 3초.
+        // 방에 들어가기 전에 기다려야 취소돼도 나갈 방이 없다
+        await syncServerClock();
+        abort.signal.throwIfAborted();
         if (choice.kind === 'quick') {
           mode = 'ffa';
           let found: Joined | null = null;
