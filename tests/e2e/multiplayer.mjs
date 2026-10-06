@@ -194,6 +194,10 @@ class Player {
       if (m.type() === 'error' && !/pointer ?lock|requestPointerLock|AudioContext/i.test(text)) {
         this.errors.push(text);
         log(`  !! ${label} console.error: ${text}`);
+      } else if (/dropping data from peer/.test(text)) {
+        // Trystero 재조립 패치(tools/patch-deps.mjs, #1)가 정상 통신을 버리면 안 된다
+        this.errors.push(text);
+        log(`  !! ${label} ${text}`);
       } else if (/\[net\]/.test(text)) {
         log(`  .. ${label} ${m.type()}: ${text}`);
       }

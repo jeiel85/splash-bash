@@ -4,7 +4,7 @@
  */
 import type { DamageSource, WeaponId } from './types';
 
-export const GAME_VERSION = '0.1.0';
+export const GAME_VERSION = '0.1.1';
 
 export const PLAYER = {
   radius: 0.4,

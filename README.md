@@ -42,7 +42,7 @@
 ## 개발
 
 ```bash
-npm install
+npm install         # postinstall 이 Trystero 보안 패치를 적용(tools/patch-deps.mjs)
 npm run dev          # http://127.0.0.1:5317  (?map=test 시험장, ?bots=0 봇 끄기)
 npm test             # 단위·규약·맵 검증 테스트
 npm run test:e2e     # 실제 P2P 다중 브라우저 테스트(자체 서버를 띄움, 인터넷 필요)
