@@ -5,6 +5,9 @@
  *     진행 중인 경기를 초기화했다(#2). 서버가 없는 P2P 게임이지만 페이지를 내려 준 정적 호스트(GitHub Pages·Vite)는
  *     응답마다 Date 헤더를 붙이므로, 같은 출처 HEAD 요청 한 번으로 기기 시계 오차를 약 1초 안으로 줄인다.
  *     실패하면(오프라인·헤더 없음·시간 초과) 기기 시계를 그대로 쓴다 — 고치기 전과 같은 동작.
+ *     보정값은 잰 순간의 기기 시계 기준이라, 탭을 열어 둔 사이 NTP 등으로 기기 시계가 바뀌면 틀어진다.
+ *     그래서 온라인에 들어갈 때마다 새로 잰다(입장 탐색에 수 초가 걸리므로 HEAD 한 번은 무시할 만하다).
+ *     performance.now() 기준으로 붙잡아 두는 방법은 절전 중 멈추는 플랫폼이 있어 쓰지 않는다.
  */
 
 const TIMEOUT_MS = 3000;
@@ -35,6 +38,8 @@ async function measure(): Promise<void> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
+    // 이번에 못 재면 옛 보정값이 아니라 기기 시계를 쓴다(옛 값은 그사이 바뀐 기기 시계에 맞지 않을 수 있다)
+    offsetMs = 0;
     const url = new URL(import.meta.env.BASE_URL, location.href);
     const sentAt = Date.now();
     // 캐시된 응답의 Date 는 옛 시각이라 반드시 서버까지 간다
@@ -49,16 +54,19 @@ async function measure(): Promise<void> {
 }
 
 /**
- * 서버 시각을 한 번 재 둔다(동시에 여러 번 불러도 요청은 하나). 거부하지 않는다.
+ * 서버 시각을 새로 잰다(재는 중에 또 부르면 같은 요청을 기다린다). 거부하지 않는다.
  * Input: 없음(같은 출처의 BASE_URL 에 HEAD)
- * Output: 끝나면 resolve — 성공하면 serverNow() 가 보정된다
- * 왜: 온라인 입장 전에 기다릴 수 있게 Promise 로 돌려준다. 실패는 경고만 남기고 다음 호출 때 다시 시도한다
+ * Output: 끝나면 resolve — 성공하면 serverNow() 가 보정되고, 실패하면 기기 시계 그대로
+ * 왜: 온라인 입장 직전에 기다릴 수 있게 Promise 로 돌려준다. 실패는 경고만 남긴다
  *     (게임 진행은 기기 시계로 계속 가능하므로 막지 않는다).
  */
 export function syncServerClock(): Promise<void> {
-  pending ??= measure().catch((err: unknown) => {
-    pending = null;
-    console.warn('[clock] 서버 시각을 가져오지 못해 기기 시계를 씁니다(호스트 선출이 시계 오차에 민감해짐)', err);
-  });
+  pending ??= measure()
+    .catch((err: unknown) => {
+      console.warn('[clock] 서버 시각을 가져오지 못해 기기 시계를 씁니다(호스트 선출이 시계 오차에 민감해짐)', err);
+    })
+    .finally(() => {
+      pending = null;
+    });
   return pending;
 }

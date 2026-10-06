@@ -56,25 +56,37 @@ describe('syncServerClock / serverNow', () => {
     expect(init).toMatchObject({ method: 'HEAD', cache: 'no-store' });
   });
 
-  it('동시에 여러 번 불러도 요청은 하나', async () => {
+  it('재는 중에 또 부르면 요청은 하나, 끝난 뒤 부르면 새로 잰다', async () => {
     fetchMock.mockResolvedValue(dateResponse('Tue, 06 Oct 2026 03:00:00 GMT'));
     const clock = await import('../src/net/serverClock');
     await Promise.all([clock.syncServerClock(), clock.syncServerClock()]);
-    await clock.syncServerClock();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    await clock.syncServerClock();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('실패하면 기기 시계를 그대로 쓰고(거부하지 않음), 다음 호출에서 다시 시도한다', async () => {
+  it('기기 시계가 바뀐 뒤 다시 재면 새 보정값을 쓴다(옛 보정값을 더하지 않음)', async () => {
+    fetchMock.mockResolvedValue(dateResponse('Tue, 06 Oct 2026 03:02:00 GMT'));
+    const clock = await import('../src/net/serverClock');
+    await clock.syncServerClock();
+    expect(clock.serverNow() - Date.now()).toBe(120_000);
+    // NTP 가 기기 시계를 2분 앞으로 고침
+    vi.setSystemTime(Date.now() + 120_000);
+    await clock.syncServerClock();
+    expect(clock.serverNow() - Date.now()).toBe(0);
+  });
+
+  it('실패하면 기기 시계를 쓴다(거부하지 않음, 옛 보정값도 버림)', async () => {
+    fetchMock.mockResolvedValueOnce(dateResponse('Tue, 06 Oct 2026 02:59:50 GMT'));
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     fetchMock.mockResolvedValueOnce(dateResponse(null));
-    fetchMock.mockResolvedValueOnce(dateResponse('Tue, 06 Oct 2026 02:59:50 GMT'));
     const clock = await import('../src/net/serverClock');
+    await clock.syncServerClock();
+    expect(clock.serverNow() - Date.now()).toBe(-10_000);
     await expect(clock.syncServerClock()).resolves.toBeUndefined();
     expect(clock.serverNow()).toBe(Date.now());
     await clock.syncServerClock(); // Date 헤더 없음
     expect(clock.serverNow()).toBe(Date.now());
-    await clock.syncServerClock();
-    expect(clock.serverNow() - Date.now()).toBe(-10_000);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(console.warn).toHaveBeenCalledTimes(2);
   });
