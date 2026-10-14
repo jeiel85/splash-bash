@@ -1,5 +1,6 @@
 import { joinRoom, selfId, type Room, type JsonValue, type TurnServerConfig } from 'trystero';
 import { NET } from '../config';
+import { t } from '../i18n';
 import { MSG, type MsgType } from './protocol';
 import type { PeerId } from '../types';
 
@@ -79,7 +80,7 @@ export class TrysteroTransport implements Transport {
     this.room = joinRoom(
       { appId: NET.appId, password, turnConfig: turnConfigFromEnv(), relayConfig: { urls: [...SIGNALING_RELAYS] } },
       roomId,
-      { onJoinError: (e) => this.onError?.(`방 참가 오류: ${e.error}`) },
+      { onJoinError: (e) => this.onError?.(t('net.joinError', { err: e.error })) },
     );
     for (const type of Object.values(MSG)) {
       const action = this.room.makeAction<JsonValue>(type);

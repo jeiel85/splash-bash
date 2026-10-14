@@ -8,3 +8,4 @@ tools/blender/__pycache__/
 tools/blender/previews/
 scratch/
 .claude/
+release/

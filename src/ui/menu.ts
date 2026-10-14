@@ -3,7 +3,8 @@ import type { SfxName } from '../audio/sfx';
 import { HAT_IDS, type GameMode, type HatId } from '../types';
 import { sanitizeName } from '../net/protocol';
 import type { LockFailure } from '../core/input';
-import { inviteLink, normalizeRoomCode, randomCosmetics, roomCodeHint, SETTING_RANGES, type Profile, type Settings } from './profile';
+import { inviteLink, isEmbedded, normalizeRoomCode, randomCosmetics, roomCodeHint, SETTING_RANGES, type Profile, type Settings } from './profile';
+import { getLang, t, type StringKey } from '../i18n';
 import { formatCount } from './visitCounter';
 
 export type PlayChoice =
@@ -14,16 +15,12 @@ export type PlayChoice =
 
 export type StatusKind = 'info' | 'error' | 'ok';
 
-const HAT_LABEL: Record<HatId, string> = {
-  none: '맨머리', cap: '🧢 모자', duck: '🦆 오리', flower: '🌼 꽃', crown: '👑 왕관', frog: '🐸 개구리', bucket: '👒 벙거지',
-};
+const hatLabel = (hat: HatId): string => t(`hat.${hat}`);
 
-const COLOR_NAMES = ['탠저린', '포도', '딸기', '민트', '레몬', '하늘', '라임', '복숭아'];
-
-/** 조작 안내(연결 중 카드·시작 안내에서 공용) */
-const CONTROLS: Array<[string, string]> = [
-  ['WASD', '이동'], ['Space', '점프'], ['Shift', '슬라이드'], ['클릭', '발사'],
-  ['1 2 3', '무기'], ['G', '물풍선'], ['Tab', '점수판'], ['Esc', '메뉴'],
+/** 조작 안내(연결 중 카드·시작 안내에서 공용). 키 이름이 문구 키면(클릭) 번역한다 */
+const CONTROLS: Array<[string | StringKey, StringKey]> = [
+  ['WASD', 'ctl.move'], ['Space', 'ctl.jump'], ['Shift', 'ctl.slide'], ['ctl.clickKey', 'ctl.fire'],
+  ['1 2 3', 'ctl.weapons'], ['G', 'ctl.balloon'], ['Tab', 'ctl.scoreboard'], ['Esc', 'ctl.menu'],
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, parent?: HTMLElement, text?: string): HTMLElementTagNameMap[K] {
@@ -38,8 +35,8 @@ function controlsCard(parent: HTMLElement): HTMLDivElement {
   const box = el('div', 'controls', parent);
   for (const [key, what] of CONTROLS) {
     const c = el('span', 'control', box);
-    el('kbd', '', c, key);
-    el('span', '', c, what);
+    el('kbd', '', c, key.startsWith('ctl.') ? t(key as StringKey) : key);
+    el('span', '', c, t(what));
   }
   return box;
 }
@@ -75,7 +72,7 @@ export async function copyInvite(code: string, button: HTMLButtonElement, manual
       ok = false;
     }
   }
-  button.textContent = ok ? '복사했어요! ✓' : '링크를 직접 복사해 주세요';
+  button.textContent = ok ? t(isEmbedded() ? 'invite.copiedWeb' : 'invite.copied') : t('invite.manual');
   button.classList.toggle('copied', ok);
   if (ok) manualBox.classList.add('hidden');
   setTimeout(() => {
@@ -96,12 +93,12 @@ class InviteCard {
   constructor(parent: HTMLElement, sound: UiSound) {
     this.root = el('div', 'invite-card hidden', parent);
     const top = el('div', 'invite-top', this.root);
-    el('span', 'invite-cap', top, '친구 초대 · 방 코드');
+    el('span', 'invite-cap', top, t('invite.cap'));
     this.codeEl = el('span', 'invite-code', top);
-    this.copyBtn = el('button', 'btn primary invite-copy', this.root, '🔗 초대 링크 복사');
+    this.copyBtn = el('button', 'btn primary invite-copy', this.root, t('invite.copy'));
     this.manual = el('input', 'menu-input invite-manual hidden', this.root);
     this.manual.readOnly = true;
-    this.manual.setAttribute('aria-label', '초대 링크');
+    this.manual.setAttribute('aria-label', t('invite.link'));
     this.copyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!this.code) return;
@@ -174,22 +171,22 @@ export function buildSettings(parent: HTMLElement, settings: Settings, onChange:
   };
   const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-  const sound = group('소리');
-  range(sound, '전체 음량', 'volume', pct);
-  range(sound, '음악', 'music', pct);
-  range(sound, '효과음', 'sfx', pct);
+  const sound = group(t('set.sound'));
+  range(sound, t('set.volume'), 'volume', pct);
+  range(sound, t('set.music'), 'music', pct);
+  range(sound, t('set.sfx'), 'sfx', pct);
 
-  const ctl = group('조작');
-  range(ctl, '마우스 감도', 'sensitivity', (v) => v.toFixed(2));
-  toggle(ctl, '마우스 상하 반전', 'invertY');
+  const ctl = group(t('set.controls'));
+  range(ctl, t('set.sensitivity'), 'sensitivity', (v) => v.toFixed(2));
+  toggle(ctl, t('set.invertY'), 'invertY');
 
-  const screen = group('화면');
-  range(screen, '시야각', 'fov', (v) => `${v}°`);
+  const screen = group(t('set.screen'));
+  range(screen, t('set.fov'), 'fov', (v) => `${v}°`);
   const q = el('div', 'settings-row', screen);
-  el('span', 'settings-name', q, '그래픽 품질');
+  el('span', 'settings-name', q, t('set.quality'));
   const seg = el('div', 'segmented', q);
   const qBtns = (['high', 'low'] as const).map((v) => {
-    const b = el('button', 'seg-btn', seg, v === 'high' ? '높음' : '낮음(빠름)');
+    const b = el('button', 'seg-btn', seg, t(v === 'high' ? 'set.qualityHigh' : 'set.qualityLow'));
     b.type = 'button';
     b.addEventListener('click', () => {
       settings.quality = v;
@@ -201,7 +198,7 @@ export function buildSettings(parent: HTMLElement, settings: Settings, onChange:
   const paintQ = () => qBtns.forEach((b, i) => b.classList.toggle('active', (i === 0 ? 'high' : 'low') === settings.quality));
   paintQ();
   refreshers.push(paintQ);
-  toggle(screen, '움직임 줄이기', 'reduceMotion', '흔들림·통통 튀는 효과를 줄여요');
+  toggle(screen, t('set.reduceMotion'), 'reduceMotion', t('set.reduceMotionNote'));
 
   return { refresh: () => refreshers.forEach((f) => f()) };
 }
@@ -214,6 +211,8 @@ export interface MenuHandlers {
   /** 닉네임 입력 중 미리보기(저장 안 함) */
   onPreview(p: Profile): void;
   onPlay(c: PlayChoice): void;
+  /** 언어 버튼(한국어 ↔ English) — 다시 불러온다 */
+  onLang(): void;
   sound: UiSound;
 }
 
@@ -256,16 +255,16 @@ export class Menu {
         s.style.setProperty('--i', String(i++));
       }
     }
-    el('div', 'logo-sub', logo, '물총 대소동');
+    el('div', 'logo-sub', logo, t('menu.sub'));
 
     // ---- 꾸미기
     const custom = el('section', 'menu-card menu-custom', grid);
     const customHead = el('div', 'card-head', custom);
-    el('div', 'card-title', customHead, '내 캐릭터 꾸미기');
-    const dice = el('button', 'chip dice', customHead, '🎲 랜덤');
+    el('div', 'card-title', customHead, t('menu.custom'));
+    const dice = el('button', 'chip dice', customHead, t('menu.dice'));
     dice.type = 'button';
-    dice.title = '색깔·모자를 무작위로 바꿔요';
-    el('label', 'menu-label', custom, '닉네임').htmlFor = 'menu-name';
+    dice.title = t('menu.diceTitle');
+    el('label', 'menu-label', custom, t('menu.name')).htmlFor = 'menu-name';
     const name = el('input', 'menu-input', custom);
     name.id = 'menu-name';
     name.maxLength = 14;
@@ -283,13 +282,13 @@ export class Menu {
       if (e.key === 'Enter') name.blur();
     });
 
-    el('div', 'menu-label', custom, '색깔');
+    el('div', 'menu-label', custom, t('menu.color'));
     const colors = el('div', 'menu-swatches', custom);
     const colorBtns = PLAYER_COLORS.map((c, i) => {
       const b = el('button', 'swatch', colors);
       b.type = 'button';
       b.style.background = c;
-      b.title = COLOR_NAMES[i] ?? `색 ${i + 1}`;
+      b.title = i < 8 ? t(`color.${i}` as StringKey) : t('menu.colorN', { n: i + 1 });
       b.setAttribute('aria-label', b.title);
       b.addEventListener('click', () => {
         profile.cosmetics.color = i;
@@ -300,10 +299,10 @@ export class Menu {
       return b;
     });
 
-    el('div', 'menu-label', custom, '모자');
+    el('div', 'menu-label', custom, t('menu.hat'));
     const hats = el('div', 'menu-hats', custom);
     const hatBtns = HAT_IDS.map((hat) => {
-      const b = el('button', 'chip', hats, HAT_LABEL[hat]);
+      const b = el('button', 'chip', hats, hatLabel(hat));
       b.type = 'button';
       b.addEventListener('click', () => {
         profile.cosmetics.hat = hat;
@@ -339,32 +338,32 @@ export class Menu {
     this.deviceNote.setAttribute('role', 'alert');
     this.inviteBox = el('div', 'menu-invite hidden', play);
     const invTop = el('div', 'menu-invite-top', this.inviteBox);
-    el('span', '', invTop, '💌 초대받은 방');
+    el('span', '', invTop, t('menu.invited'));
     this.inviteCode = el('span', 'invite-code', invTop);
-    // 문구 "참가" 는 tests/e2e/multiplayer.mjs 가 초대 링크 참가 버튼으로 찾는다(바꾸면 함께 고칠 것)
-    this.onlineButton(this.button(this.inviteBox, '참가', 'big primary', () => {
+    // 문구 "참가"(한국어) 는 tests/e2e/multiplayer.mjs 가 초대 링크 참가 버튼으로 찾는다(바꾸면 함께 고칠 것)
+    this.onlineButton(this.button(this.inviteBox, t('menu.join'), 'big primary', () => {
       if (this.invite) this.h.onPlay({ kind: 'join', code: this.invite });
     }));
 
     this.quick = this.onlineButton(this.button(play, '', 'big primary quick', () => this.h.onPlay({ kind: 'quick' })));
-    el('span', 'btn-title', this.quick, '빠른 대전');
-    el('span', 'btn-sub', this.quick, '바로 시작 · 사람이 적으면 봇이 채워요');
+    el('span', 'btn-title', this.quick, t('menu.quick'));
+    el('span', 'btn-sub', this.quick, t('menu.quickSub'));
 
     const friends = el('div', 'menu-row', play);
-    this.onlineButton(this.button(friends, '방 만들기', 'secondary', () => this.h.onPlay({ kind: 'create', mode: profile.mode })));
-    this.onlineButton(this.button(friends, '코드로 참가', 'secondary', () => {
+    this.onlineButton(this.button(friends, t('menu.create'), 'secondary', () => this.h.onPlay({ kind: 'create', mode: profile.mode })));
+    this.onlineButton(this.button(friends, t('menu.joinCode'), 'secondary', () => {
       this.codeRow.classList.toggle('hidden');
       if (!this.codeRow.classList.contains('hidden')) this.codeInput.focus();
     }));
     // P2P 라 같은 방 사람끼리 IP 주소가 보인다(서버리스 구조의 한계) — 공개 방에 들어가기 전에 알린다
-    el('div', 'menu-note', play, '🔒 온라인은 브라우저끼리 직접 연결돼서 같은 방 사람에게 내 IP 주소가 보여요. 모르는 사람이 싫으면 방 만들기로 친구끼리!');
+    el('div', 'menu-note', play, t('menu.ipNote'));
     this.codeRow = el('div', 'menu-join hidden', play);
     this.codeInput = el('input', 'menu-input code', this.codeRow);
-    this.codeInput.placeholder = '방 코드';
+    this.codeInput.placeholder = t('menu.codePlaceholder');
     this.codeInput.maxLength = 8;
     this.codeInput.autocomplete = 'off';
     this.codeInput.spellcheck = false;
-    this.codeInput.setAttribute('aria-label', '방 코드');
+    this.codeInput.setAttribute('aria-label', t('menu.codePlaceholder'));
     const join = () => {
       const c = normalizeRoomCode(this.codeInput.value);
       if (!c) {
@@ -377,15 +376,15 @@ export class Menu {
     this.codeInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') join();
     });
-    this.onlineButton(this.button(this.codeRow, '입장', 'secondary', join));
+    this.onlineButton(this.button(this.codeRow, t('menu.enter'), 'secondary', join));
 
-    this.button(play, '🤖 연습 모드 (봇과 대전)', 'ghost', () => this.h.onPlay({ kind: 'practice', mode: profile.mode }));
+    this.button(play, t('menu.practice'), 'ghost', () => this.h.onPlay({ kind: 'practice', mode: profile.mode }));
 
     const modeRow = el('div', 'menu-mode', play);
-    el('span', 'menu-label', modeRow, '방 만들기·연습 규칙');
+    el('span', 'menu-label', modeRow, t('menu.rules'));
     const seg = el('div', 'segmented', modeRow);
     const modeBtns = (['ffa', 'tdm'] as const).map((m) => {
-      const b = el('button', 'seg-btn', seg, m === 'ffa' ? '개인전' : '팀전');
+      const b = el('button', 'seg-btn', seg, t(m === 'ffa' ? 'mode.ffa' : 'mode.tdm'));
       b.type = 'button';
       b.addEventListener('click', () => {
         profile.mode = m;
@@ -405,14 +404,21 @@ export class Menu {
     const foot = el('footer', 'menu-foot', grid);
     controlsCard(foot);
     // 번들한 오픈소스(three.js·Trystero·Jua 폰트 등) 고지. tools/licenses.mjs 가 만든 public/ 파일
-    const credits = el('a', 'menu-credits', foot, '크레딧·라이선스');
+    const credits = el('a', 'menu-credits', foot, t('menu.credits'));
     credits.href = 'third-party-licenses.txt';
     credits.target = '_blank';
     credits.rel = 'noopener';
     // 방문자 수는 외부 카운터에서 늦게 오거나 못 올 수 있어 값이 생길 때까지 숨겨 둔다(setVisits)
     this.visits = el('span', 'menu-visits hidden', foot);
     this.visits.setAttribute('aria-live', 'polite');
-    const gear = el('button', 'btn small ghost menu-gear', this.root, '⚙ 설정');
+    const corner = el('div', 'menu-corner', this.root);
+    // 언어 버튼: 지금과 반대 언어 이름을 보인다(한국어 화면에서는 English). 다시 불러와 모든 문구를 바꾼다
+    const langBtn = el('button', 'btn small ghost menu-lang', corner, t('menu.lang'));
+    langBtn.type = 'button';
+    langBtn.lang = getLang() === 'ko' ? 'en' : 'ko';
+    langBtn.title = t('menu.langTitle');
+    langBtn.addEventListener('click', () => this.h.onLang());
+    const gear = el('button', 'btn small ghost menu-gear', corner, t('menu.settings'));
     gear.type = 'button';
     gear.addEventListener('click', () => this.openSettings(true));
     el('div', 'menu-version', this.root, `v${GAME_VERSION}`);
@@ -424,10 +430,10 @@ export class Menu {
     });
     const sCard = el('div', 'modal-card', this.settingsModal);
     sCard.setAttribute('role', 'dialog');
-    sCard.setAttribute('aria-label', '설정');
-    el('div', 'card-title', sCard, '⚙ 설정');
+    sCard.setAttribute('aria-label', t('menu.settingsLabel'));
+    el('div', 'card-title', sCard, t('menu.settings'));
     this.settingsPanel = buildSettings(sCard, profile.settings, () => this.h.onProfile(profile));
-    const close = el('button', 'btn primary', sCard, '닫기');
+    const close = el('button', 'btn primary', sCard, t('menu.close'));
     close.type = 'button';
     close.addEventListener('click', () => this.openSettings(false));
     addEventListener('keydown', (e) => {
@@ -464,8 +470,8 @@ export class Menu {
 
   /** 사이트 방문자 수(외부 카운터). null 이면 칸을 숨긴다 */
   setVisits(n: number | null): void {
-    this.visits.textContent = n === null ? '' : `👀 방문 ${formatCount(n)}`;
-    this.visits.title = n === null ? '' : '이 사이트를 찾아온 방문 수(탭당 한 번 세요)';
+    this.visits.textContent = n === null ? '' : t('menu.visits', { n: formatCount(n) });
+    this.visits.title = n === null ? '' : t('menu.visitsTitle');
     this.visits.classList.toggle('hidden', n === null);
   }
 
@@ -535,19 +541,19 @@ export class PauseMenu {
     this.root = el('div', 'pause hidden', parent);
     const card = el('div', 'pause-card', this.root);
     card.setAttribute('role', 'dialog');
-    card.setAttribute('aria-label', '일시정지');
+    card.setAttribute('aria-label', t('pause.label'));
     const left = el('div', 'pause-col', card);
-    el('div', 'pause-title', left, '잠깐 쉬는 중');
+    el('div', 'pause-title', left, t('pause.title'));
     // 연습은 이 동안 멈추지만 온라인은 다른 사람이 계속 움직인다
-    this.onlineNote = el('div', 'pause-note hidden', left, '온라인 경기는 멈추지 않아요 — 쉬는 동안에도 젖을 수 있어요!');
-    const resume = el('button', 'btn big primary', left, '계속하기');
+    this.onlineNote = el('div', 'pause-note hidden', left, t('pause.online'));
+    const resume = el('button', 'btn big primary', left, t('pause.resume'));
     resume.type = 'button';
     resume.addEventListener('click', () => {
       sound('click');
       onResume();
     });
     this.invite = new InviteCard(left, sound);
-    const leave = el('button', 'btn ghost', left, '🚪 방 나가기');
+    const leave = el('button', 'btn ghost', left, t('pause.leave'));
     leave.type = 'button';
     leave.addEventListener('click', () => {
       sound('back');
@@ -588,9 +594,9 @@ export class ConnectingOverlay {
     for (let i = 0; i < 3; i++) el('span', 'drop', drop);
     this.text = el('div', 'overlay-title', card);
     this.sub = el('div', 'overlay-sub', card);
-    el('div', 'overlay-cap', card, '조작법');
+    el('div', 'overlay-cap', card, t('connect.controls'));
     controlsCard(card);
-    const cancel = el('button', 'btn ghost', card, '취소 (Esc)');
+    const cancel = el('button', 'btn ghost', card, t('connect.cancel'));
     cancel.type = 'button';
     cancel.addEventListener('click', () => {
       sound('back');
@@ -614,11 +620,14 @@ export class ConnectingOverlay {
   }
 }
 
-/** 포인터 잠금을 못 얻었을 때 시작 안내에 띄우는 문구 */
-export const LOCK_FAILURE_TEXT: Record<LockFailure, string> = {
-  unsupported: '이 기기·브라우저에서는 마우스로 조준할 수 없어요. 키보드·마우스가 있는 PC 브라우저로 열어 주세요.',
-  failed: '마우스 잠금을 못 했어요 😢 다시 눌러 보고, 그래도 안 되면 메뉴로 나가 주세요.',
-};
+/**
+ * 포인터 잠금을 못 얻었을 때 시작 안내에 띄우는 문구. 다른 사이트의 iframe 안이면(itch.io 등) 그 사이트의
+ * 전체 화면 버튼을 권한다 — iframe 이 잠금을 허락하지 않는 포털도 있다.
+ */
+export function lockFailureText(reason: LockFailure, embedded = isEmbedded()): string {
+  if (reason === 'unsupported') return t('lock.unsupported');
+  return t(embedded ? 'lock.embedded' : 'lock.failed');
+}
 
 /**
  * 포인터 잠금이 없을 때: "클릭해서 시작!" + (방 코드가 있으면) 초대 카드 + 메뉴로 나가기.
@@ -635,7 +644,7 @@ export class PlayPrompt {
     // click-to-play: tools/ingame-shot.mjs 가 이 클래스로 안내를 숨긴다(호환 유지)
     this.root = el('div', 'overlay play-prompt click-to-play hidden', parent);
     const card = el('div', 'overlay-card', this.root);
-    const start = el('button', 'btn big primary play-start', card, '클릭해서 시작! 💦');
+    const start = el('button', 'btn big primary play-start', card, t('prompt.start'));
     start.type = 'button';
     start.addEventListener('click', () => {
       sound('click');
@@ -647,7 +656,7 @@ export class PlayPrompt {
     this.error.setAttribute('role', 'alert');
     controlsCard(card);
     this.invite = new InviteCard(card, sound);
-    const leave = el('button', 'btn ghost', card, '🚪 메뉴로 나가기');
+    const leave = el('button', 'btn ghost', card, t('prompt.leave'));
     leave.type = 'button';
     leave.addEventListener('click', () => {
       sound('back');
@@ -670,7 +679,7 @@ export class PlayPrompt {
    */
   lockFailed(reason: LockFailure): void {
     if (!this.visible || (reason === 'failed' && !this.clicked)) return;
-    this.error.textContent = LOCK_FAILURE_TEXT[reason];
+    this.error.textContent = lockFailureText(reason);
     this.error.classList.remove('hidden');
   }
 

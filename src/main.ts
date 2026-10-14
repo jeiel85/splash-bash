@@ -3,6 +3,7 @@ import './ui/styles.css';
 import { MATCH, NET } from './config';
 import { canPlayWithMouse, Input, readPointerEnv } from './core/input';
 import { FrameClock, simulationPaused } from './core/loop';
+import { applyDocument, switchLang, t } from './i18n';
 import { Sfx } from './audio/sfx';
 import { RenderContext } from './render/renderer';
 import { loadAssets, loadMap, type GameAssets } from './render/assets';
@@ -17,6 +18,8 @@ import { OfflineTransport, TrysteroTransport, type Transport } from './net/trans
 import type { GameMap } from './world/map';
 import { buildTestArena } from './world/testArena';
 
+applyDocument();
+
 const app = document.getElementById('app')!;
 const ui = document.getElementById('ui')!;
 
@@ -24,7 +27,7 @@ const ui = document.getElementById('ui')!;
 class FriendlyError extends Error {}
 
 /** 키보드·마우스(포인터 잠금)로 할 수 없는 기기에서 메뉴에 띄우는 안내 */
-const DEVICE_BLOCK_TEXT = '🖱️ 키보드·마우스가 있는 PC에서 하는 게임이에요. 이 기기에서는 온라인 방에 들어갈 수 없어요 — 초대 링크는 PC 브라우저로 열어 주세요.';
+const DEVICE_BLOCK_TEXT = t('device.block');
 
 /** 게임을 아예 시작할 수 없을 때(WebGL 없음 등) 전체 화면 안내 */
 function showFatal(title: string, detail: string): void {
@@ -33,17 +36,17 @@ function showFatal(title: string, detail: string): void {
   box.className = 'overlay fatal';
   const card = document.createElement('div');
   card.className = 'overlay-card';
-  const t = document.createElement('div');
-  t.className = 'overlay-title';
-  t.textContent = title;
+  const head = document.createElement('div');
+  head.className = 'overlay-title';
+  head.textContent = title;
   const d = document.createElement('div');
   d.className = 'overlay-sub';
   d.textContent = detail;
   const b = document.createElement('button');
   b.className = 'btn primary';
-  b.textContent = '새로고침';
+  b.textContent = t('reload');
   b.addEventListener('click', () => location.reload());
-  card.append(t, d, b);
+  card.append(head, d, b);
   box.appendChild(card);
   ui.appendChild(box);
 }
@@ -84,18 +87,18 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 /** 온라인 대전이 가능한 환경인지 먼저 확인(안 되면 이유를 알려 준다) */
 function checkOnlineSupport(): void {
   if (typeof RTCPeerConnection === 'undefined') {
-    throw new FriendlyError('이 브라우저는 온라인 대전(WebRTC)을 지원하지 않아요. 연습 모드로 놀아 주세요!');
+    throw new FriendlyError(t('online.noWebrtc'));
   }
-  if (!navigator.onLine) throw new FriendlyError('인터넷에 연결되어 있지 않아요. 연결을 확인하거나 연습 모드로 놀아 주세요.');
+  if (!navigator.onLine) throw new FriendlyError(t('online.offline'));
   if (!window.isSecureContext || !crypto.subtle) {
-    throw new FriendlyError('온라인 대전은 보안 연결(https) 주소에서만 할 수 있어요.');
+    throw new FriendlyError(t('online.insecure'));
   }
 }
 
 function friendlyMessage(err: unknown): string {
   if (err instanceof FriendlyError) return err.message;
-  if (!navigator.onLine) return '인터넷 연결이 끊긴 것 같아요. 연결을 확인하고 다시 시도해 주세요. (연습 모드는 바로 할 수 있어요)';
-  return '연결에 실패했어요. 잠시 후 다시 시도해 주세요. (연습 모드는 바로 할 수 있어요)';
+  if (!navigator.onLine) return t('online.lost');
+  return t('online.failed');
 }
 
 interface Joined { transport: Transport; warning: string | null }
@@ -105,34 +108,34 @@ interface Joined { transport: Transport; warning: string | null }
  * 정원이 찼으면 null. 취소되면 방을 나가고 AbortError.
  */
 async function joinRoom(roomId: string, password: string | undefined, waitMs: number, signal: AbortSignal): Promise<Joined | null> {
-  const t = new TrysteroTransport(roomId, password);
+  const tr = new TrysteroTransport(roomId, password);
   let warning: string | null = null;
-  t.onError = (msg) => {
+  tr.onError = (msg) => {
     warning = msg;
     console.warn('[net] 방 참가 중 오류', msg);
   };
   try {
     if (waitMs > 0) {
       const firstPeer = new Promise<void>((resolve) => {
-        if (t.peers().length) resolve();
-        t.onPeerJoin = () => resolve();
+        if (tr.peers().length) resolve();
+        tr.onPeerJoin = () => resolve();
       });
       const found = await Promise.race([firstPeer.then(() => true), wait(waitMs, signal).then(() => false)]);
       if (found) await wait(NET.discover.settleMs, signal);
     }
   } catch (err) {
-    await t.leave().catch((e: unknown) => console.warn('[net] 취소 후 방 나가기 실패', e));
+    await tr.leave().catch((e: unknown) => console.warn('[net] 취소 후 방 나가기 실패', e));
     throw err;
   } finally {
     // Session 이 이어받아 다시 설정한다(이미 연결된 피어에게는 Session 이 hello 를 방송)
-    t.onPeerJoin = null;
+    tr.onPeerJoin = null;
   }
-  t.onError = null;
-  if (t.peers().length >= MATCH.maxPlayers) {
-    await t.leave();
+  tr.onError = null;
+  if (tr.peers().length >= MATCH.maxPlayers) {
+    await tr.leave();
     return null;
   }
-  return { transport: t, warning };
+  return { transport: tr, warning };
 }
 
 function start(ctx: RenderContext): void {
@@ -175,6 +178,7 @@ function start(ctx: RenderContext): void {
     onProfile,
     onPreview: (p) => stage?.setProfile(p),
     onPlay: (c) => void play(c),
+    onLang: switchLang,
     sound,
   });
   const pause = new PauseMenu(ui, profile.settings, () => onProfile(profile), () => input.requestLock(), () => void leave(), sound);
@@ -240,11 +244,11 @@ function start(ctx: RenderContext): void {
 
   async function boot(): Promise<void> {
     menu.setBusy(true);
-    menu.setStatus('물총에 물 채우는 중… 💧');
+    menu.setStatus(t('boot.drop'));
     try {
       const useTest = new URLSearchParams(location.search).get('map') === 'test';
       const [a, m] = await Promise.all([
-        loadAssets((done, total) => menu.setStatus(`물총에 물 채우는 중… ${done}/${total}`)),
+        loadAssets((done, total) => menu.setStatus(t('boot.progress', { done, total }))),
         useTest ? Promise.resolve(buildTestArena()) : loadMap('backyard'),
       ]);
       assets = a;
@@ -258,7 +262,7 @@ function start(ctx: RenderContext): void {
       (window as unknown as { __ready?: boolean }).__ready = true;
     } catch (err) {
       console.error('[main] 게임 데이터 로드 실패', err);
-      menu.setStatus('게임 데이터를 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.', 'error', { label: '새로고침', fn: () => location.reload() });
+      menu.setStatus(t('boot.failed'), 'error', { label: t('reload'), fn: () => location.reload() });
       (window as unknown as { __error?: string }).__error = String(err);
       (window as unknown as { __ready?: boolean }).__ready = true;
     }
@@ -286,9 +290,11 @@ function start(ctx: RenderContext): void {
       let roomCode: string | null = null;
       let mode = profile.mode;
       let warning: string | null = null;
+      /** 빠른 대전 방 번호(정원 초과로 밀려나면 다음 방부터 본다) */
+      let quickRoom = 1;
       if (choice.kind === 'practice') {
         transport = new OfflineTransport();
-        roomLabel = '연습 모드';
+        roomLabel = t('room.practice');
         mode = choice.mode;
       } else {
         checkOnlineSupport();
@@ -302,32 +308,33 @@ function start(ctx: RenderContext): void {
           let n = nextQuickRoom;
           nextQuickRoom = 1;
           for (; n <= NET.quickRoomCount && !found; n++) {
-            connecting.show('물총 친구 찾는 중…', n === 1 ? '아무도 없으면 봇들과 먼저 시작해요' : `${n - 1}번 방이 가득 차서 다음 방을 보고 있어요`);
+            connecting.show(t('connect.quick'), n === 1 ? t('connect.quickFirst') : t('connect.quickNext', { n: n - 1 }));
             found = await joinRoom(`${NET.quickRoomPrefix}-${n}`, undefined, NET.discover.quickWaitMs, abort.signal);
           }
-          if (!found) throw new FriendlyError('빠른 대전 방이 모두 가득 찼어요 😢 잠시 후 다시 시도하거나 방을 만들어 보세요.');
+          if (!found) throw new FriendlyError(t('connect.quickFull'));
           transport = found.transport;
           warning = found.warning;
-          roomLabel = `빠른 대전 #${n - 1}`;
+          quickRoom = n - 1;
+          roomLabel = t('room.quick', { n: quickRoom });
         } else {
           roomCode = choice.kind === 'create' ? makeRoomCode() : choice.code;
           if (choice.kind === 'create') mode = choice.mode;
           // 문구에서 코드 바로 뒤에 조사를 붙이지 않는다(난수 코드라 받침 유무에 따라 을/를·이/가가 틀린다)
-          connecting.show(choice.kind === 'create' ? `방 만드는 중… (코드 ${roomCode})` : `방에 들어가는 중… (코드 ${roomCode})`, choice.kind === 'create' ? '만들고 나면 초대 링크를 복사할 수 있어요' : '친구들을 찾고 있어요');
+          connecting.show(t(choice.kind === 'create' ? 'connect.creating' : 'connect.joining', { code: roomCode }), t(choice.kind === 'create' ? 'connect.createSub' : 'connect.joinSub'));
           const joined = await joinRoom(`room-${roomCode}`, roomCode, choice.kind === 'create' ? 0 : NET.discover.joinWaitMs, abort.signal);
-          if (!joined) throw new FriendlyError(`방이 가득 찼어요 (코드 ${roomCode}, 최대 ${MATCH.maxPlayers}명). 다른 방을 만들어 보세요.`);
+          if (!joined) throw new FriendlyError(t('connect.roomFull', { code: roomCode, max: MATCH.maxPlayers }));
           transport = joined.transport;
           warning = joined.warning;
-          roomLabel = `방 ${roomCode}`;
+          roomLabel = t('room.code', { code: roomCode });
           history.replaceState(null, '', `#room=${roomCode}`);
         }
       }
       connecting.hide();
-      startGame(choice, transport, roomLabel, roomCode, mode, warning);
+      startGame(choice, transport, roomLabel, roomCode, mode, warning, quickRoom);
     } catch (err) {
       input.exitLock();
       if (abort.signal.aborted) {
-        menu.setStatus('연결을 취소했어요.', 'info');
+        menu.setStatus(t('online.cancelled'), 'info');
       } else {
         console.error('[main] 방 참가 실패', err);
         menu.setStatus(friendlyMessage(err), 'error');
@@ -340,7 +347,7 @@ function start(ctx: RenderContext): void {
     }
   }
 
-  function startGame(choice: PlayChoice, transport: Transport, roomLabel: string, roomCode: string | null, mode: Profile['mode'], warning: string | null): void {
+  function startGame(choice: PlayChoice, transport: Transport, roomLabel: string, roomCode: string | null, mode: Profile['mode'], warning: string | null, quickRoom: number): void {
     stage?.exit();
     menu.show(false);
     applySettings(profile);
@@ -349,7 +356,7 @@ function start(ctx: RenderContext): void {
     const g = new Game(ctx, input, sfx, hud, assets!, map!, { transport, roomLabel, roomCode, mode, botFill, profile });
     game = g;
     g.on('notice', (text) => hud.toast(text));
-    g.on('roomFull', () => void onRoomFull(choice, roomLabel));
+    g.on('roomFull', () => void onRoomFull(choice, quickRoom));
     hud.setInvite(roomCode);
     sfx.setScene('game');
     g.setInputEnabled(input.locked);
@@ -360,21 +367,20 @@ function start(ctx: RenderContext): void {
       // 잠금을 얻을 수 없는 기기(연습 모드로 들어온 휴대폰 등)는 누르기 전에 이유부터 보인다
       if (!mouseReady) prompt.lockFailed('unsupported');
     }
-    if (choice.kind === 'create') hud.toast(`방을 만들었어요! 코드 ${roomCode} · Esc → 초대 링크 복사 💌`, 7);
-    else if (choice.kind === 'join' && transport.peers().length === 0) hud.toast('아직 아무도 없어요. 친구에게 방 코드를 알려 주세요!', 5);
-    else if (choice.kind === 'quick' && transport.peers().length === 0) hud.toast('지금은 봇들과 먼저 놀아요. 누가 들어오면 알려 줄게요!', 5);
-    if (warning) hud.toast('온라인 연결이 불안정해요 — 친구가 못 들어올 수도 있어요', 5);
+    if (choice.kind === 'create') hud.toast(t('toast.created', { code: roomCode ?? '' }), 7);
+    else if (choice.kind === 'join' && transport.peers().length === 0) hud.toast(t('toast.alone'), 5);
+    else if (choice.kind === 'quick' && transport.peers().length === 0) hud.toast(t('toast.quickAlone'), 5);
+    if (warning) hud.toast(t('online.unstable'), 5);
   }
 
   /** 입장 뒤 정원 초과로 밀려남: 빠른 대전은 다음 방으로, 친구 방은 메뉴로 */
-  async function onRoomFull(choice: PlayChoice, roomLabel: string): Promise<void> {
+  async function onRoomFull(choice: PlayChoice, quickRoom: number): Promise<void> {
     await leave();
     if (choice.kind === 'quick') {
-      const current = Number(/#(\d+)/.exec(roomLabel)?.[1] ?? '1');
-      nextQuickRoom = Math.min(NET.quickRoomCount, current + 1);
+      nextQuickRoom = Math.min(NET.quickRoomCount, quickRoom + 1);
       void play({ kind: 'quick' });
     } else {
-      menu.setStatus(`방이 가득 찼어요 (최대 ${MATCH.maxPlayers}명). 다른 방을 만들어 보세요.`, 'error');
+      menu.setStatus(t('connect.roomFullLater', { max: MATCH.maxPlayers }), 'error');
     }
   }
 
@@ -439,4 +445,4 @@ function start(ctx: RenderContext): void {
 
 const ctx = createRenderer();
 if (ctx) start(ctx);
-else showFatal('3D 그래픽을 켤 수 없어요 😢', '브라우저 설정에서 하드웨어 가속(WebGL)을 켜거나, 최신 Chrome·Edge·Firefox·Safari 로 열어 주세요.');
+else showFatal(t('fatal.webgl'), t('fatal.webglDetail'));

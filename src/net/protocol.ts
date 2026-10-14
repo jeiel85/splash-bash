@@ -4,6 +4,7 @@
  */
 import { HAT_IDS, WEAPON_IDS, type Cosmetics, type DamageSource, type MatchState, type PeerId, type PlayerInfo, type PlayerSnapshot, type ScoreLine, type TeamId, type WeaponId } from '../types';
 import { MATCH, PLAYER_COLORS } from '../config';
+import { t } from '../i18n';
 
 /** Trystero action 이름(12바이트 이하) */
 export const MSG = {
@@ -54,7 +55,7 @@ export function sanitizeName(raw: unknown): string {
   // 서로게이트 쌍(이모지 등) 가운데에서 잘렸으면 반쪽 글자를 버린다
   if (out.length === NAME_MAX && /[\ud800-\udbff]$/.test(out)) out = out.slice(0, -1);
   out = out.replace(/\u200d{2,}/g, '\u200d').replace(/^[\s\u200d]+|[\s\u200d]+$/g, '');
-  return out || '물총러';
+  return out || t('name.default');
 }
 
 // ------------------------------------------------------------------ player info

@@ -21,7 +21,8 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   // pause=0: 포인터 잠금이 없어도 연습 모드 시뮬레이션을 계속 돌린다(DEV 전용 — 잠금이 풀리면 연습은 멈추므로)
-  await page.goto(`${base}/?bots=0&pause=0${map ? `&map=${map}` : ''}`);
+  // lang=ko: 아래에서 "연습" 문구로 버튼을 찾는다
+  await page.goto(`${base}/?lang=ko&bots=0&pause=0${map ? `&map=${map}` : ''}`);
   await page.waitForFunction(() => window.__ready === true, null, { timeout: 90000 });
   const err = await page.evaluate(() => window.__error ?? null);
   if (err) throw new Error(err);

@@ -1,6 +1,7 @@
 import { PLAYER_COLORS } from '../config';
 import { HAT_IDS, type Cosmetics, type GameMode } from '../types';
 import { sanitizeName } from '../net/protocol';
+import { t, tList } from '../i18n';
 
 export interface Settings {
   sensitivity: number;
@@ -39,11 +40,11 @@ export const DEFAULT_SETTINGS: Settings = {
   sensitivity: 1, volume: 0.7, music: 0.4, sfx: 1, fov: 80, quality: 'high', invertY: false, reduceMotion: false,
 };
 
-const ADJ = ['촉촉한', '말랑한', '통통한', '반짝이는', '졸린', '용감한', '수줍은', '신나는'];
-const NOUN = ['오리', '물개', '해파리', '올챙이', '수달', '펭귄', '개구리', '고래'];
-
+/** 처음 온 사람의 닉네임: 형용사+동물(지금 언어로. 영어도 14자 안에 들도록 7자 이하 낱말만 쓴다) */
 function randomName(): string {
-  return `${ADJ[Math.floor(Math.random() * ADJ.length)]}${NOUN[Math.floor(Math.random() * NOUN.length)]}`;
+  const adj = tList('name.adj');
+  const noun = tList('name.noun');
+  return `${adj[Math.floor(Math.random() * adj.length)]}${noun[Math.floor(Math.random() * noun.length)]}`;
 }
 
 /**
@@ -183,9 +184,9 @@ export function normalizeRoomCode(raw: string): string | null {
  */
 export function roomCodeHint(raw: string): string {
   const c = roomCodeChars(raw);
-  if (!c) return '방 코드를 입력해 주세요';
-  if ([...c].some((ch) => !CODE_ALPHABET.includes(ch))) return '헷갈리는 글자(0, 1, O, I)는 방 코드에 없어요. 코드를 다시 확인해 주세요';
-  return `방 코드를 확인해 주세요 (영문·숫자 ${ROOM_CODE_MIN}~${ROOM_CODE_MAX}자)`;
+  if (!c) return t('code.empty');
+  if ([...c].some((ch) => !CODE_ALPHABET.includes(ch))) return t('code.confusing');
+  return t('code.length', { min: ROOM_CODE_MIN, max: ROOM_CODE_MAX });
 }
 
 /** URL 해시(#room=CODE)에서 초대 코드를 읽는다 */
@@ -194,7 +195,27 @@ export function roomCodeFromHash(hash: string): string | null {
   return m ? normalizeRoomCode(m[1]) : null;
 }
 
-/** 초대 링크: 현재 주소 + #room=CODE (개발용 ?map= 같은 쿼리는 유지) */
-export function inviteLink(code: string): string {
+/** 웹 버전(GitHub Pages) 주소. 다른 사이트에 넣어진 빌드의 초대 링크가 여기를 가리킨다 */
+export const PUBLIC_URL = 'https://jeiel85.github.io/splash-bash/';
+
+/**
+ * 다른 사이트(itch.io 등)의 iframe 안에서 도는지. 그런 포털은 게임을 자기 파일 호스트(itch.zone)에 올려 iframe 으로
+ * 보여 주는데, 그 주소는 남이 열 수 있는 페이지가 아니고 #room= 해시도 iframe 에 넘겨 주지 않는다.
+ * top 에 접근할 수 없으면(다른 출처) 예외가 날 수 있어 그때도 넣어진 것으로 본다.
+ */
+export function isEmbedded(): boolean {
+  try {
+    return window.top !== window.self;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * 초대 링크: 현재 주소 + #room=CODE (개발용 ?map= 같은 쿼리는 유지).
+ * iframe 안이면 웹 버전 주소로 만든다 — 두 빌드는 같은 appId·릴레이를 써서 같은 방에 들어간다.
+ */
+export function inviteLink(code: string, embedded = isEmbedded()): string {
+  if (embedded) return `${PUBLIC_URL}#room=${code}`;
   return `${location.origin}${location.pathname}${location.search}#room=${code}`;
 }

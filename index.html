@@ -28,9 +28,22 @@
   <body>
     <div id="app"></div>
     <div id="ui">
-      <div id="boot" role="status"><div class="boot-drop"></div>물총에 물 채우는 중…</div>
+      <div id="boot" role="status"><div class="boot-drop"></div><span id="boot-text">물총에 물 채우는 중…</span></div>
     </div>
-    <noscript>이 게임은 JavaScript 가 필요해요. 브라우저에서 JavaScript 를 켜 주세요.</noscript>
+    <script>
+      // 번들이 오기 전 첫 문구만 화면 언어로(src/i18n.ts 의 pickLang 과 같은 순서: ?lang= → 저장된 선택 → 브라우저 언어)
+      (function () {
+        var l = new URLSearchParams(location.search).get('lang');
+        if (l !== 'ko' && l !== 'en') { try { l = localStorage.getItem('splash-bash:lang'); } catch (e) { l = null; } }
+        if (l !== 'ko' && l !== 'en') {
+          l = 'en';
+          var langs = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+          for (var i = 0; i < langs.length; i++) { var b = String(langs[i]).toLowerCase().slice(0, 2); if (b === 'ko' || b === 'en') { l = b; break; } }
+        }
+        if (l === 'en') document.getElementById('boot-text').textContent = 'Filling up the water guns…';
+      })();
+    </script>
+    <noscript>이 게임은 JavaScript 가 필요해요. 브라우저에서 JavaScript 를 켜 주세요. / This game needs JavaScript. Please turn it on in your browser.</noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
