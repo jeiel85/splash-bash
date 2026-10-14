@@ -1,8 +1,19 @@
 // dist/ 를 itch.io HTML 업로드용 zip 으로 묶는다(압축 루트에 index.html). 먼저 npm run build.
-// 의존성 없는 순수 Node(zlib.crc32 때문에 22.2+): deflate 항목 + 중앙 디렉터리.
+// 의존성 없는 순수 Node: deflate 항목 + 중앙 디렉터리. CRC-32 는 직접 계산한다(zlib.crc32 는 Node 22.2+ 라 Node 20 에서 못 씀).
 import { readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { deflateRawSync, crc32 } from 'node:zlib';
+import { deflateRawSync } from 'node:zlib';
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
 
 const root = 'dist';
 const out = 'release/splash-bash-itch.zip';
