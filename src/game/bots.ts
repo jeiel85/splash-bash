@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BALLOON, BOT, PLAYER, STREAM, TANK, WEAPONS } from '../config';
+import { tList } from '../i18n';
 import { emptyIntent, type Intent } from '../core/input';
 import { mulberry32 } from '../core/rng';
 import { WEAPON_IDS, type PeerId, type ScoreLine, type TeamId, type WeaponId } from '../types';
@@ -60,10 +61,11 @@ export interface BotSkill {
 
 export type BotMode = 'wander' | 'engage' | 'refill' | 'retreat';
 
-const BOT_NAMES = ['보글보글', '찰랑이', '퐁당이', '물방울', '첨벙이', '촉촉이', '뽀송이', '출렁이', '방울방울', '졸졸이'];
 
+/** 봇 이름(방장 화면 언어로 — 다른 참가자에게는 방장이 정한 이름이 그대로 간다) */
 export function botName(index: number): string {
-  return BOT_NAMES[index % BOT_NAMES.length];
+  const names = tList('bot.names');
+  return names[index % names.length];
 }
 
 const DEG = Math.PI / 180;

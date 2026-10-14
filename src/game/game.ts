@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { BALLOON, BOT, JUMPPAD, MATCH, NET, PLAYER, TANK, WATER_TINT, WEAPONS } from '../config';
+import { BALLOON, BOT, JUMPPAD, MATCH, NET, PLAYER, TANK, teamName, WATER_TINT, WEAPONS } from '../config';
+import { t as i18n } from '../i18n';
 import { Emitter } from '../core/events';
 import { emptyIntent, type Input, type Intent } from '../core/input';
 import { mulberry32 } from '../core/rng';
@@ -226,7 +227,7 @@ export class Game extends Emitter<GameEvents> {
     if (!r) {
       r = new RemoteActor(info, this.makeAvatar(info));
       this.remotes.set(info.id, r);
-      this.hud.toast(`${info.name} 님이 들어왔어요 💦`);
+      this.hud.toast(i18n('toast.joined', { name: info.name }));
       this.sfx.play('click');
     } else {
       r.info = info;
@@ -266,7 +267,7 @@ export class Game extends Emitter<GameEvents> {
     const r = this.remotes.get(id);
     if (!r) return;
     // 말이 없어 이미 "연결이 끊겼어요" 를 알린 사람은 다시 알리지 않는다(전송 계층의 떠남 알림은 10초 넘게 늦다)
-    if (!this.silenceNoticed.delete(id)) this.hud.toast(`${r.info.name} 님이 나갔어요`);
+    if (!this.silenceNoticed.delete(id)) this.hud.toast(i18n('toast.left', { name: r.info.name }));
     r.avatar.dispose();
     this.remotes.delete(id);
     // 떠난 사람에게 보낼 명중은 받을 권한자가 없다
@@ -318,7 +319,7 @@ export class Game extends Emitter<GameEvents> {
     if ((newRound || toPlaying) && m.phase === 'playing') {
       this.respawnLocal();
       for (const b of this.bots.values()) this.respawnBot(b);
-      this.hud.centerMessage('새 경기 시작!', m.mode === 'tdm' ? '팀을 도와 적을 흠뻑 적셔요' : '모두를 흠뻑 적셔요', 2);
+      this.hud.centerMessage(i18n('match.new'), i18n(m.mode === 'tdm' ? 'match.newTdm' : 'match.newFfa'), 2);
       this.sfx.play('spawn');
     } else if (m.phase === 'playing' && this.vit.alive) {
       // 같은 경기 안에서 내 팀이 스폰 뒤에 정해지거나 바뀜(손님은 진짜 호스트의 상태를 받기 전 임시 팀으로 먼저 스폰한다):
@@ -366,7 +367,7 @@ export class Game extends Emitter<GameEvents> {
     this.lastPhase = this.matchHost.phase;
     // 이어받은 상태에 없던 사람은 방금 팀이 정해졌다
     this.refreshAllIdentities();
-    if (this.remotes.size > 0) this.hud.toast('방장이 되었어요 👑');
+    if (this.remotes.size > 0) this.hud.toast(i18n('toast.host'));
   }
 
   private loseHost(): void {
@@ -598,7 +599,7 @@ export class Game extends Emitter<GameEvents> {
     else this.fx.splashOut(pos, this.colorOf(ev.killer), ev.pos[1]);
     this.sfx.play('splashed', { pos, volume: 0.9 });
     const self = this.session.selfId;
-    const killer = ev.killer === ev.victim ? '물웅덩이' : this.nameOf(ev.killer);
+    const killer = ev.killer === ev.victim ? i18n('match.puddle') : this.nameOf(ev.killer);
     const bySelf = ev.killer === self && ev.victim !== self;
     // 킬피드·연속 기록·흠뻑 카드(누가 무엇으로)는 HUD 가 처리
     this.hud.splash({
@@ -852,10 +853,10 @@ export class Game extends Emitter<GameEvents> {
     if (silent === this.silenceNoticed.has(id)) return;
     if (silent) {
       this.silenceNoticed.add(id);
-      this.hud.toast(`${r.info.name} 님 연결이 끊겼어요`);
+      this.hud.toast(i18n('toast.silent', { name: r.info.name }));
     } else {
       this.silenceNoticed.delete(id);
-      this.hud.toast(`${r.info.name} 님이 다시 연결됐어요`);
+      this.hud.toast(i18n('toast.back', { name: r.info.name }));
     }
   }
 
@@ -1108,10 +1109,10 @@ export class Game extends Emitter<GameEvents> {
     const rows = this.rows;
     this.hud.setScoreboard(showBoard, rows, mode);
     if (inResults && state) {
-      let title = '경기 종료!';
-      if (state.winner === 'team0' || state.winner === 'team1') title = `${state.winner === 'team0' ? '탠저린' : '그레이프'} 팀 승리! 🎉`;
-      else if (state.winner === 'draw') title = '무승부!';
-      else if (state.winner) title = `${this.nameOf(state.winner)} 우승! 🏆`;
+      let title = i18n('match.over');
+      if (state.winner === 'team0' || state.winner === 'team1') title = i18n('match.teamWin', { team: teamName(state.winner === 'team0' ? 0 : 1) });
+      else if (state.winner === 'draw') title = i18n('match.draw');
+      else if (state.winner) title = i18n('match.winner', { name: this.nameOf(state.winner) });
       this.hud.showResults(true, title, rows, mode, timerMs / 1000);
     } else {
       this.hud.showResults(false, '', rows, mode, 0);

@@ -168,7 +168,8 @@ class Player {
     if (clockSkewMs) await context.addInitScript(skewGameClock, clockSkewMs);
     const page = await context.newPage();
     const p = new Player(label, context, page);
-    const params = new URLSearchParams();
+    // 한국어 화면 고정(아래에서 "참가" 같은 문구로 버튼을 찾는다)
+    const params = new URLSearchParams({ lang: 'ko' });
     if (!bots) params.set('bots', '0');
     if (MAP === 'test') params.set('map', 'test');
     await page.goto(`${BASE}/?${params}#room=${code}`);

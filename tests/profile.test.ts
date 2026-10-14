@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PLAYER_COLORS } from '../src/config';
 import { HAT_IDS } from '../src/types';
-import { DEFAULT_SETTINGS, loadProfile, normalizeRoomCode, parseSettings, randomCosmetics, roomCodeFromHash, roomCodeHint, saveProfile } from '../src/ui/profile';
+import { DEFAULT_SETTINGS, inviteLink, loadProfile, normalizeRoomCode, parseSettings, randomCosmetics, roomCodeFromHash, roomCodeHint, saveProfile } from '../src/ui/profile';
+import { setLang } from '../src/i18n';
+
+// 아래 안내 문구 기대값은 한국어 화면 기준(영어 문구는 tests/i18n.test.ts)
+setLang('ko');
 
 describe('설정 불러오기(parseSettings)', () => {
   it('예전 저장본(음악·효과음·움직임 줄이기 없음)은 기존 값을 살리고 새 항목만 기본값', () => {
@@ -60,6 +64,16 @@ describe('초대 코드', () => {
     expect(roomCodeHint('abc')).toBe('방 코드를 확인해 주세요 (영문·숫자 4~8자)');
     expect(roomCodeHint('ABCDEFGHJK')).toBe('방 코드를 확인해 주세요 (영문·숫자 4~8자)');
     expect(roomCodeHint('  -- ')).toBe('방 코드를 입력해 주세요');
+  });
+
+  it('초대 링크: 다른 사이트 iframe(itch.io 등) 안이면 웹 버전 주소, 아니면 지금 주소(쿼리 유지)', () => {
+    vi.stubGlobal('location', { origin: 'http://127.0.0.1:5317', pathname: '/', search: '?map=test' });
+    try {
+      expect(inviteLink('K7QMX', false)).toBe('http://127.0.0.1:5317/?map=test#room=K7QMX');
+      expect(inviteLink('K7QMX', true)).toBe('https://jeiel85.github.io/splash-bash/#room=K7QMX');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

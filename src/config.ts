@@ -3,8 +3,9 @@
  * 게임플레이 수치를 바꿀 때는 이 파일만 고친다(로직에 매직 넘버 금지).
  */
 import type { DamageSource, WeaponId } from './types';
+import { t } from './i18n';
 
-export const GAME_VERSION = '0.1.1';
+export const GAME_VERSION = '0.2.0';
 
 export const PLAYER = {
   radius: 0.4,
@@ -68,8 +69,6 @@ export const TANK = {
 
 export interface WeaponDef {
   id: WeaponId;
-  /** UI 표시 이름 */
-  name: string;
   /** 발사 간격(초) */
   interval: number;
   /** 버튼을 누르고 있으면 연사 */
@@ -113,7 +112,7 @@ export const STREAM = {
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
   pistol: {
-    id: 'pistol', name: '퐁퐁 권총',
+    id: 'pistol',
     interval: 0.22, automatic: false, pellets: 1,
     spreadDeg: 0.4, spreadMoving: 2, spreadAir: 4,
     speed: 60, straightTime: 0.3, life: 0.7, visualRadius: 0.085,
@@ -121,7 +120,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     cost: 4, recoilDeg: 1.2, moveScaleFiring: 1,
   },
   soaker: {
-    id: 'soaker', name: '콸콸 펌프',
+    id: 'soaker',
     interval: 0.1, automatic: true, pellets: 1,
     spreadDeg: 1.5, spreadMoving: 2, spreadAir: 4,
     speed: 40, straightTime: 0.25, life: 0.6, visualRadius: 0.075,
@@ -129,7 +128,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     cost: 1.5, recoilDeg: 0.3, moveScaleFiring: 0.8,
   },
   bucket: {
-    id: 'bucket', name: '양동이 블래스터',
+    id: 'bucket',
     interval: 0.7, automatic: false, pellets: 10,
     pattern: [{ deg: 3, count: 3 }, { deg: 7, count: 6 }],
     spreadDeg: 0, spreadMoving: 1, spreadAir: 1.3,
@@ -360,14 +359,11 @@ export const PLAYER_COLORS = [
 ] as const;
 
 export const TEAM_COLORS = ['#FF8A1F', '#7B5CFF'] as const;
-export const TEAM_NAMES = ['탠저린 팀', '그레이프 팀'] as const;
+/** 팀 이름(화면 언어로) */
+export const teamName = (team: 0 | 1): string => t(team === 0 ? 'team.0' : 'team.1');
 
 /** 물줄기 색: 쏜 사람 색을 이만큼 물빛에 섞는다 */
 export const WATER_TINT = { base: '#BFF3FF', mix: 0.35 } as const;
 
-export const SOURCE_LABEL: Record<DamageSource, string> = {
-  pistol: '퐁퐁 권총',
-  soaker: '콸콸 펌프',
-  bucket: '양동이 블래스터',
-  balloon: '물풍선',
-};
+/** 무기·물풍선 이름(화면 언어로) */
+export const sourceLabel = (source: DamageSource): string => t(`weapon.${source}`);

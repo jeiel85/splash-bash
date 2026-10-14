@@ -27,6 +27,12 @@
 - **방 만들기** — 방 코드가 생기고, Esc 메뉴의 "초대 링크 복사"로 친구를 부르세요(`…/#room=코드`).
 - **연습 모드** — 인터넷 없이 봇과 대전.
 
+### 언어 · itch.io
+
+- 화면 언어는 **한국어 / English** 두 가지입니다. `?lang=ko|en` → 저장된 선택 → 브라우저 언어 순으로 고르고(그 밖의 언어는 영어), 메인 메뉴 오른쪽 위 버튼으로 바꿉니다. 문구는 `src/i18n.ts` 한곳에 있습니다.
+- itch.io 처럼 다른 사이트의 iframe 안에서 돌면 초대 링크를 **웹 버전 주소**(https://jeiel85.github.io/splash-bash/#room=코드)로 만듭니다 — iframe 주소는 남이 열 수 없고 `#room=`도 넘어오지 않기 때문입니다. 두 빌드는 같은 방에 들어갑니다. 클립보드가 막히면 링크 칸이 나타나 직접 복사하고, 마우스 잠금이 막히면 전체 화면 버튼을 권하는 안내가 뜹니다. 저장소가 막혀도 기본값으로 실행됩니다.
+- itch 업로드용 zip: `npm run build && npm run pack:itch` → `release/splash-bash-itch.zip`. 등록 방법·소개문은 [docs/itch/README.md](docs/itch/README.md).
+
 ## 서버리스 온라인 구조
 
 [Trystero](https://github.com/dmotz/trystero) 가 공개 Nostr 릴레이로 WebRTC 연결 정보를 주고받아(시그널링) 브라우저끼리 직접 연결합니다. 게임 데이터는 릴레이를 거치지 않고 P2P 로만 오갑니다.
@@ -47,6 +53,7 @@ npm run dev          # http://127.0.0.1:5317  (?map=test 시험장, ?bots=0 봇 
 npm test             # 단위·규약·맵 검증 테스트
 npm run test:e2e     # 실제 P2P 다중 브라우저 테스트(자체 서버를 띄움, 인터넷 필요)
 npm run build        # 타입 검사 + 정적 빌드(dist/)
+npm run pack:itch    # dist/ → release/splash-bash-itch.zip (itch.io HTML 업로드용)
 node tools/licenses.mjs          # 제3자 라이선스 고지(public/third-party-licenses.txt) 다시 만들기 — 런타임 의존성을 바꾸면 실행 후 커밋
 node tools/licenses.mjs --check  # 고지가 지금 빌드와 같은지만 확인(릴리스 전)
 ```

@@ -1,4 +1,5 @@
-import { BALLOON, MATCH, PLAYER, SOURCE_LABEL, TANK, TEAM_COLORS, TEAM_NAMES, WEAPONS } from '../config';
+import { BALLOON, MATCH, PLAYER, sourceLabel, TANK, TEAM_COLORS, teamName, WEAPONS } from '../config';
+import { t, type StringKey } from '../i18n';
 import type { Sfx } from '../audio/sfx';
 import type { DamageSource, GameMode, MatchPhase, TeamId, WeaponId } from '../types';
 import { WEAPON_IDS } from '../types';
@@ -73,17 +74,18 @@ function fmtTime(ms: number): string {
 }
 
 /** 점수 표 머리줄. 캐주얼 플레이어도 바로 알아보게 줄임말(적심·젖음) 대신 "몇 번 적셨나 / 몇 번 젖었나" */
-const TABLE_HEAD = ['#', '이름', '적신 수', '젖은 수', '핑'] as const;
+const TABLE_HEAD = ['#', 'col.name', 'col.splashes', 'col.soaked', 'col.ping'] as const;
+const headText = (h: (typeof TABLE_HEAD)[number]): string => (h === '#' ? h : t(h));
 
 /** 연속 기록(흠뻑 젖지 않고 연달아 적심) 알림 */
-const STREAK_CALLOUTS: Record<number, { title: string; sub: string }> = {
-  3: { title: '3연속 스플래시!', sub: '물총 솜씨가 반짝반짝' },
-  5: { title: '5연속! 멈출 수 없어!', sub: '뒷마당이 물바다가 되어 가요' },
-  8: { title: '8연속! 전설의 물총왕!', sub: '아무도 못 말려요' },
+const STREAK_CALLOUTS: Record<number, { title: StringKey; sub: StringKey }> = {
+  3: { title: 'streak.3', sub: 'streak.3sub' },
+  5: { title: 'streak.5', sub: 'streak.5sub' },
+  8: { title: 'streak.8', sub: 'streak.8sub' },
 };
 /** 3초 안에 연달아 적심 */
 const MULTI_WINDOW = 3;
-const MULTI_CALLOUTS = ['', '', '더블 스플래시!', '트리플 스플래시!', '멀티 스플래시!'];
+const MULTI_CALLOUTS: ReadonlyArray<StringKey | null> = [null, null, 'multi.2', 'multi.3', 'multi.4'];
 
 const WAVE_DIAL = 'M0 0Q12.5 -5 25 0T50 0T75 0T100 0T125 0T150 0T175 0T200 0V110H0Z';
 const WAVE_DIAL_BACK = 'M0 0Q12.5 5 25 0T50 0T75 0T100 0T125 0T150 0T175 0T200 0V110H0Z';
@@ -260,7 +262,7 @@ export class Hud {
     const dialLabel = el('div', 'dial-label ink', this.dial);
     const drop = el('span', 'dial-drop', dialLabel);
     drop.innerHTML = DROP_ICON;
-    el('span', '', dialLabel, '젖음');
+    el('span', '', dialLabel, t('hud.soak'));
 
     // 물탱크·무기(오른쪽 아래)
     const br = el('div', 'hud-arms', this.root);
@@ -269,12 +271,12 @@ export class Hud {
       const s = el('div', 'hud-slot', slots);
       el('span', 'slot-key', s, String(i + 1));
       s.appendChild(iconEl(id, 'slot-icon'));
-      el('span', 'slot-name', s, WEAPONS[id].name);
+      el('span', 'slot-name', s, sourceLabel(id));
       this.weaponSlots.push(s);
     });
     this.balloonEl = el('div', 'hud-balloon', slots);
     this.balloonEl.appendChild(iconEl('balloon', 'slot-icon'));
-    el('span', 'slot-name', this.balloonEl, '물풍선');
+    el('span', 'slot-name', this.balloonEl, sourceLabel('balloon'));
     el('span', 'slot-key', this.balloonEl, 'G');
     const tankCol = el('div', 'hud-tank-col', br);
     this.tankMsg = el('div', 'hud-tank-msg hidden', tankCol);
@@ -292,13 +294,13 @@ export class Hud {
       <rect x="11" y="15" width="5" height="64" rx="2.5" class="tank-shine"/>
     </svg>`;
     this.tankLevel = this.tank.querySelector('.tank-level') as SVGGElement;
-    el('div', 'hud-tank-label ink', tankCol, '물탱크');
+    el('div', 'hud-tank-label ink', tankCol, t('hud.tank'));
 
     this.hint = el('div', 'hud-hint ink hidden', this.root);
 
     // 흠뻑 카드
     this.soaked = el('div', 'hud-soaked hidden', this.root);
-    this.soakedTitle = el('div', 'soaked-title', this.soaked, '흠뻑 젖었다!');
+    this.soakedTitle = el('div', 'soaked-title', this.soaked, t('hud.soakedTitle'));
     const card = el('div', 'soaked-card', this.soaked);
     const by = el('div', 'soaked-by', card);
     this.soakedDot = el('span', 'soaked-dot', by);
@@ -339,17 +341,17 @@ export class Hud {
     this.inviteChip.classList.toggle('hidden', !code);
     this.inviteChip.textContent = '';
     if (code) {
-      el('span', 'invite-label', this.inviteChip, '방 코드');
+      el('span', 'invite-label', this.inviteChip, t('hud.roomCode'));
       el('span', 'invite-code', this.inviteChip, code);
-      el('span', 'invite-hint', this.inviteChip, 'Esc → 초대 링크 복사');
+      el('span', 'invite-hint', this.inviteChip, t('hud.inviteHint'));
     }
   }
 
   /** 경기(방)가 끝나면 남은 알림·연속 기록을 비운다 */
   private reset(): void {
-    this.toasts.forEach((t) => t.el.remove());
+    this.toasts.forEach((x) => x.el.remove());
     this.toasts.length = 0;
-    this.feedRows.forEach((t) => t.el.remove());
+    this.feedRows.forEach((x) => x.el.remove());
     this.feedRows.length = 0;
     this.streak = 0;
     this.multi = 0;
@@ -388,7 +390,7 @@ export class Hud {
     this.updateSoaked(d);
     this.updateTimers(dt);
 
-    const hint = !d.alive ? '' : d.lowWater ? '물 부족! 분수나 수영장에서 채워요 💧' : d.shielded ? '비눗방울 보호 중 · 쏘면 풀려요' : '';
+    const hint = !d.alive ? '' : d.lowWater ? t('hud.lowWater') : d.shielded ? t('hud.shielded') : '';
     if (hint !== this.hintText) {
       this.hintText = hint;
       this.hint.textContent = hint;
@@ -475,7 +477,7 @@ export class Hud {
       this.tankMsg.classList.toggle('hidden', !low && !done);
       this.tankMsg.classList.toggle('low', low && !done);
       this.tankMsg.classList.toggle('done', done);
-      this.tankMsg.textContent = done ? '충전 완료!' : low ? '물 부족!' : '';
+      this.tankMsg.textContent = done ? t('hud.tankFull') : low ? t('hud.tankLow') : '';
       if (popDone || (low && !done)) this.animate(this.tankMsg, POP_IN, 260);
     }
     // 물풍선 준비 "띵": 물이 40 을 넘어 준비됐을 때
@@ -530,14 +532,14 @@ export class Hud {
           const chip = el('span', `score-chip team${d.myTeam === team ? ' mine' : ''}`, this.scoreEl);
           chip.style.background = TEAM_COLORS[team];
           el('span', 'score-num ink', chip, String(d.teamScores[team]));
-          if (team === 0) el('span', 'score-sep ink', this.scoreEl, `목표 ${MATCH.tdmScoreLimit}`);
+          if (team === 0) el('span', 'score-sep ink', this.scoreEl, t('hud.goal', { n: MATCH.tdmScoreLimit }));
         }
       } else {
         const me = el('span', 'score-chip me', this.scoreEl);
-        el('span', 'score-cap', me, '나');
+        el('span', 'score-cap', me, t('hud.me'));
         el('span', 'score-num', me, String(d.myScore));
         const lead = el('span', 'score-chip lead', this.scoreEl);
-        el('span', 'score-cap', lead, '1등');
+        el('span', 'score-cap', lead, t('hud.leader'));
         el('span', 'score-num', lead, String(d.leaderScore));
         el('span', 'score-goal', lead, `/${MATCH.ffaScoreLimit}`);
       }
@@ -546,7 +548,7 @@ export class Hud {
     if (d.roomLabel !== this.roomLabel || d.playerCount !== this.roomCount) {
       this.roomLabel = d.roomLabel;
       this.roomCount = d.playerCount;
-      this.roomName.textContent = `${d.roomLabel} · ${d.playerCount}명`;
+      this.roomName.textContent = t('room.players', { label: d.roomLabel, n: d.playerCount });
     }
   }
 
@@ -566,13 +568,13 @@ export class Hud {
         const name = info?.name ?? d.soakedBy;
         this.soakedDot.classList.toggle('hidden', !info);
         if (info) this.soakedDot.style.background = info.color;
-        this.soakedBy.textContent = name ? `${name}에게 흠뻑!` : '물에 풍덩!';
+        this.soakedBy.textContent = name ? t('hud.soakedBy', { name }) : t('hud.soakedSelf');
         if (info) this.soakedBy.style.color = info.color;
         else this.soakedBy.style.removeProperty('color');
         this.soakedWeapon.textContent = '';
         if (info) {
           this.soakedWeapon.appendChild(iconEl(info.source, 'soaked-icon'));
-          el('span', '', this.soakedWeapon, SOURCE_LABEL[info.source]);
+          el('span', '', this.soakedWeapon, sourceLabel(info.source));
         }
         this.animate(this.soakedTitle, [
           { transform: 'scale(0.5)', opacity: 0 },
@@ -588,7 +590,7 @@ export class Hud {
       const sec = Math.max(1, Math.ceil(d.respawnIn));
       if (sec !== this.soakedSec) {
         this.soakedSec = sec;
-        this.soakedTimer.textContent = `몸 말리는 중… ${sec}`;
+        this.soakedTimer.textContent = t('hud.drying', { s: sec });
       }
       const k = 1 - Math.min(1, Math.max(0, d.respawnIn / PLAYER.respawnDelay));
       this.soakedBar.style.transform = `scaleX(${k.toFixed(3)})`;
@@ -598,11 +600,11 @@ export class Hud {
   private updateTimers(dt: number): void {
     for (const list of [this.toasts, this.feedRows]) {
       for (let i = list.length - 1; i >= 0; i--) {
-        const t = list[i];
-        t.life -= dt;
-        if (t.life <= t.fadeAt && !t.el.classList.contains('fade')) t.el.classList.add('fade');
-        if (t.life <= 0) {
-          t.el.remove();
+        const item = list[i];
+        item.life -= dt;
+        if (item.life <= item.fadeAt && !item.el.classList.contains('fade')) item.el.classList.add('fade');
+        if (item.life <= 0) {
+          item.el.remove();
           list.splice(i, 1);
         }
       }
@@ -646,7 +648,7 @@ export class Hud {
     }
     this.pingEl.classList.toggle('hidden', ping === null);
     if (ping !== null) {
-      this.pingEl.textContent = `핑 ${Math.round(ping)}ms`;
+      this.pingEl.textContent = t('hud.ping', { ms: Math.round(ping) });
       this.pingEl.dataset.q = ping < 90 ? 'good' : ping < 180 ? 'ok' : 'bad';
     }
   }
@@ -678,7 +680,7 @@ export class Hud {
     row.appendChild(iconEl(ev.source, 'feed-icon'));
     const v = el('span', 'feed-name', row, ev.victim);
     v.style.color = ev.victimColor;
-    row.title = SOURCE_LABEL[ev.source];
+    row.title = sourceLabel(ev.source);
     if (!this.reduceMotion) row.animate([{ transform: 'translateX(40px)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 220, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' });
     this.feedRows.push({ el: row, life: 5, fadeAt: 0.5 });
     while (this.feedRows.length > 5) this.feedRows.shift()!.el.remove();
@@ -689,8 +691,9 @@ export class Hud {
       this.streak++;
       this.showConfirm(ev.victim, ev.victimColor);
       const milestone = STREAK_CALLOUTS[this.streak];
-      const multi = this.multi >= 2 ? MULTI_CALLOUTS[Math.min(this.multi, MULTI_CALLOUTS.length - 1)] : '';
-      if (milestone) this.showCallout(milestone.title, multi || milestone.sub, this.streak);
+      const multiKey = this.multi >= 2 ? MULTI_CALLOUTS[Math.min(this.multi, MULTI_CALLOUTS.length - 1)] : null;
+      const multi = multiKey ? t(multiKey) : '';
+      if (milestone) this.showCallout(t(milestone.title), multi || t(milestone.sub), this.streak);
       else if (multi) this.showCallout(multi, '', this.multi);
     }
     if (ev.onSelf) {
@@ -704,7 +707,7 @@ export class Hud {
     this.confirm.textContent = '';
     const dot = el('span', 'confirm-dot', this.confirm);
     dot.style.background = color;
-    el('span', 'ink', this.confirm, `${victim} 흠뻑!`);
+    el('span', 'ink', this.confirm, t('hud.splashed', { name: victim }));
     this.confirm.classList.remove('hidden');
     this.confirmTimer = 1.3;
     this.animate(this.confirm, POP_IN, 240);
@@ -726,9 +729,9 @@ export class Hud {
   }
 
   toast(text: string, seconds = 3.2): void {
-    const t = el('div', 'toast', this.toastBox, text);
-    if (!this.reduceMotion) t.animate([{ transform: 'translateY(-10px)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 200, easing: 'ease-out' });
-    this.toasts.push({ el: t, life: seconds, fadeAt: 0.5 });
+    const toast = el('div', 'toast', this.toastBox, text);
+    if (!this.reduceMotion) toast.animate([{ transform: 'translateY(-10px)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 200, easing: 'ease-out' });
+    this.toasts.push({ el: toast, life: seconds, fadeAt: 0.5 });
     while (this.toasts.length > 4) this.toasts.shift()!.el.remove();
   }
 
@@ -757,13 +760,13 @@ export class Hud {
     const box = this.scoreboard;
     box.textContent = '';
     const head = el('div', 'panel-head', box);
-    el('div', 'panel-title', head, '점수판');
+    el('div', 'panel-title', head, t('hud.scoreboard'));
     if (mode === 'tdm') {
       const teams = el('div', 'sb-teams', head);
       for (const team of [0, 1] as const) {
-        const t = el('span', 'sb-team', teams);
-        t.style.background = TEAM_COLORS[team];
-        el('span', 'ink', t, `${TEAM_NAMES[team]} ${this.teamScores[team]}`);
+        const chip = el('span', 'sb-team', teams);
+        chip.style.background = TEAM_COLORS[team];
+        el('span', 'ink', chip, `${teamName(team)} ${this.teamScores[team]}`);
       }
     }
     this.renderTable(box, scoreboardEntries(rows, mode), mode);
@@ -793,7 +796,7 @@ export class Hud {
     const sec = Math.max(0, Math.ceil(secondsLeft));
     if (sec !== this.resultsSec && this.resultsNext) {
       this.resultsSec = sec;
-      this.resultsNext.textContent = sec > 0 ? `${sec}초 후 다음 경기` : '곧 시작!';
+      this.resultsNext.textContent = sec > 0 ? t('hud.nextMatch', { s: sec }) : t('hud.soon');
       this.resultsNext.classList.toggle('soon', sec <= 3);
       // 표를 다시 그려도 같은 초에 두 번 울리지 않게 따로 기억한다
       if (sec >= 1 && sec <= 3 && sec !== this.resultsBeep) {
@@ -811,9 +814,9 @@ export class Hud {
     if (mode === 'tdm') {
       const teams = el('div', 'sb-teams big', head);
       for (const team of [0, 1] as const) {
-        const t = el('span', 'sb-team', teams);
-        t.style.background = TEAM_COLORS[team];
-        el('span', 'ink', t, `${TEAM_NAMES[team]} ${this.teamScores[team]}`);
+        const chip = el('span', 'sb-team', teams);
+        chip.style.background = TEAM_COLORS[team];
+        el('span', 'ink', chip, `${teamName(team)} ${this.teamScores[team]}`);
       }
     }
     // 시상대: 가운데 1등, 왼쪽 2등, 오른쪽 3등. 팀전에서 한 팀이 이기면 이긴 팀 선수만 오른다
@@ -831,8 +834,8 @@ export class Hud {
       if (i === 0) el('div', 'bean-crown', bean, '👑');
       const name = el('div', 'podium-name ink', slot, r.name);
       name.title = r.name;
-      if (r.isSelf) el('span', 'sb-tag me', slot, '나');
-      el('div', 'podium-score', slot, `적신 수 ${r.splashes}`);
+      if (r.isSelf) el('span', 'sb-tag me', slot, t('hud.me'));
+      el('div', 'podium-score', slot, t('hud.podiumScore', { n: r.splashes }));
       el('div', 'podium-block', slot, String(i + 1));
     }
     if (layout.table.length) this.renderTable(box, layout.table, mode);
@@ -843,9 +846,9 @@ export class Hud {
   private renderInviteLine(box: HTMLElement): void {
     if (!this.inviteCode) return;
     const line = el('div', 'panel-invite', box);
-    el('span', '', line, '친구 부르기 · 방 코드');
+    el('span', '', line, t('hud.inviteLine'));
     el('span', 'invite-code', line, this.inviteCode);
-    el('span', 'invite-hint', line, 'Esc → 초대 링크 복사');
+    el('span', 'invite-hint', line, t('hud.inviteHint'));
   }
 
   /** 팀 머리줄 내용: 팀 색 점 + 팀 이름(이긴 팀은 🏆) */
@@ -853,7 +856,7 @@ export class Hud {
     target.classList.toggle('winner', entry.winner);
     if (entry.team === 0 || entry.team === 1) target.style.setProperty('--team', TEAM_COLORS[entry.team]);
     el('span', 'sb-group-dot', target);
-    el('span', '', target, `${entry.team === 0 || entry.team === 1 ? TEAM_NAMES[entry.team] : '팀 없음'}${entry.winner ? ' 🏆' : ''}`);
+    el('span', '', target, `${entry.team === 0 || entry.team === 1 ? teamName(entry.team) : t('team.none')}${entry.winner ? ' 🏆' : ''}`);
   }
 
   /** 점수 표. 줄 순서·순위·팀 머리줄은 ranking.ts 가 정한다 */
@@ -864,7 +867,7 @@ export class Hud {
     const first = entries[0]?.kind === 'team' ? entries[0] : null;
     TABLE_HEAD.forEach((text, i) => {
       if (i === 1 && first) this.teamLabel(el('span', 'sb-group', head), first);
-      else el('span', '', head, text);
+      else el('span', '', head, headText(text));
     });
     for (const entry of entries) {
       if (entry.kind === 'team') {
@@ -881,9 +884,9 @@ export class Hud {
       dot.style.background = r.color;
       const n = el('span', 'sb-nametext', name, r.name);
       n.title = r.name;
-      if (r.isHost) el('span', 'sb-tag host', name, '👑 방장');
-      if (r.isBot) el('span', 'sb-tag bot', name, '봇');
-      if (r.isSelf) el('span', 'sb-tag me', name, '나');
+      if (r.isHost) el('span', 'sb-tag host', name, t('hud.host'));
+      if (r.isBot) el('span', 'sb-tag bot', name, t('hud.bot'));
+      if (r.isSelf) el('span', 'sb-tag me', name, t('hud.me'));
       el('span', 'sb-num', row, String(r.splashes));
       el('span', 'sb-num dim', row, String(r.soaked));
       const ping = el('span', 'sb-ping', row, r.isBot || r.isSelf ? '-' : r.ping === null ? '…' : `${Math.round(r.ping)}`);

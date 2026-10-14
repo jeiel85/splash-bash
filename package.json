@@ -1,7 +1,7 @@
 {
   "name": "splash-bash",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "test:e2e": "node tests/e2e/multiplayer.mjs",
     "assets": "node tools/build-assets.mjs",
     "licenses": "node tools/licenses.mjs",
+    "pack:itch": "node tools/pack-itch.mjs",
     "postinstall": "node tools/patch-deps.mjs"
   },
   "dependencies": {

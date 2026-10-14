@@ -5,6 +5,10 @@ import {
   type NetHit, type NetShot, type NetSplash,
 } from '../src/net/protocol';
 import { MATCH, NET, PLAYER_COLORS } from '../src/config';
+import { setLang } from '../src/i18n';
+
+// 빈 이름의 기본 닉네임 기대값은 한국어 화면 기준(영어는 tests/i18n.test.ts)
+setLang('ko');
 import type { MatchState, PlayerInfo, PlayerSnapshot } from '../src/types';
 
 /** Trystero 는 JSON 으로 보낸다 — 실제 전송과 같은 왕복 */
