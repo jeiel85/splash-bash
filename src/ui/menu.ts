@@ -7,6 +7,9 @@ import { inviteLink, isEmbedded, normalizeRoomCode, randomCosmetics, roomCodeHin
 import { getLang, t, type StringKey } from '../i18n';
 import { formatCount } from './visitCounter';
 
+/** 소스 코드 저장소(메인 메뉴 아래 링크) */
+const REPO_URL = 'https://github.com/jeiel85/splash-bash';
+
 export type PlayChoice =
   | { kind: 'quick' }
   | { kind: 'create'; mode: GameMode }
@@ -408,6 +411,11 @@ export class Menu {
     credits.href = 'third-party-licenses.txt';
     credits.target = '_blank';
     credits.rel = 'noopener';
+    const github = el('a', 'menu-credits', foot, t('menu.github'));
+    github.href = REPO_URL;
+    github.target = '_blank';
+    github.rel = 'noopener noreferrer';
+    github.setAttribute('aria-label', t('menu.githubLabel'));
     // 방문자 수는 외부 카운터에서 늦게 오거나 못 올 수 있어 값이 생길 때까지 숨겨 둔다(setVisits)
     this.visits = el('span', 'menu-visits hidden', foot);
     this.visits.setAttribute('aria-live', 'polite');
