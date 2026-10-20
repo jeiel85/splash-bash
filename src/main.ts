@@ -13,12 +13,14 @@ import { ConnectingOverlay, Menu, PauseMenu, PlayPrompt, type PlayChoice } from 
 import { MenuStage } from './ui/menuStage';
 import { loadProfile, makeRoomCode, roomCodeFromHash, saveProfile, type Profile } from './ui/profile';
 import { fetchVisitCount } from './ui/visitCounter';
+import { registerServiceWorker } from './pwa';
 import { syncServerClock } from './net/serverClock';
 import { OfflineTransport, TrysteroTransport, type Transport } from './net/transport';
 import type { GameMap } from './world/map';
 import { buildTestArena } from './world/testArena';
 
 applyDocument();
+registerServiceWorker();
 
 const app = document.getElementById('app')!;
 const ui = document.getElementById('ui')!;
