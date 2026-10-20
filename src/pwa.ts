@@ -11,8 +11,23 @@ import { isEmbedded } from './ui/profile';
 export function registerServiceWorker(): void {
   if (!import.meta.env.PROD || !('serviceWorker' in navigator) || isEmbedded()) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch((error: unknown) => {
-      console.warn('[pwa] 서비스워커 등록 실패(게임에는 영향 없음)', error);
-    });
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`)
+      .then(() => navigator.serviceWorker.ready)
+      .then((registration) => {
+        const worker = registration.active;
+        if (!worker) return;
+        // 첫 방문처럼 SW가 제어하기 전에 받은 같은 출처 자산(workerStart 0)을 SW에 알려
+        // 오프라인용으로 캐시하게 한다. SW를 거친 요청은 SW가 이미 캐시한다.
+        worker.postMessage({ type: 'CACHE_URLS', urls: [location.href] });
+        new PerformanceObserver((list) => {
+          const urls = list.getEntries()
+            .filter((entry) => (entry as PerformanceResourceTiming).workerStart === 0)
+            .map((entry) => entry.name);
+          if (urls.length) worker.postMessage({ type: 'CACHE_URLS', urls });
+        }).observe({ type: 'resource', buffered: true });
+      })
+      .catch((error: unknown) => {
+        console.warn('[pwa] 서비스워커 등록 실패(게임에는 영향 없음)', error);
+      });
   });
 }
